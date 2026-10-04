@@ -16,13 +16,18 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// The package styles. Use (theme.go) points them at the theme in use; these
+// initial values are the base look.
 var (
-	stHead = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	stOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	stWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	stErr  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	stDim  = lipgloss.NewStyle().Faint(true)
-	stBold = lipgloss.NewStyle().Bold(true)
+	stHead  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	stOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	stWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	stErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	stDim   = lipgloss.NewStyle().Faint(true)
+	stBold  = lipgloss.NewStyle().Bold(true)
+	stThink = lipgloss.NewStyle().Faint(true)
+	stSky   = lipgloss.NewStyle().Faint(true)
+	stEgg   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 )
 
 // GlamourStyle is the Glamour standard style for markdown rendering. main
@@ -31,13 +36,33 @@ var (
 // input would race with key reads.
 var GlamourStyle = "dark"
 
-// Marks: unicode by default; ASCII when the terminal says so.
+// Marks: unicode by default; ASCII when the terminal says so. The first
+// fifteen are the pane's marks; the rest are theme glyphs, which the base
+// fills from the pane's marks or leaves empty (an empty glyph switches the
+// drawing that needs it off).
 type marks struct {
 	head, step, done, err, warn, idle, wait, drop, sep, tl, bl, h, v, h2, ell string
+
+	active, unknown, pending, lit           string // plan rows and the selected row
+	cardOpen, cardClose                     string // header and report cards
+	launch, trail, ahead, sky, orbit, field string // trajectory, background, spinner
 }
 
-var uni = marks{"▸", "·", "✓", "✗", "!", "·", "~", "–", "·", "┌", "└", "─", "│", "──", "…"}
-var asc = marks{">", "-", "+", "x", "!", ".", "~", "-", "-", "+", "+", "-", "|", "--", "..."}
+var uni = marks{"▸", "·", "✓", "✗", "!", "·", "~", "–", "·", "┌", "└", "─", "│", "──", "…",
+	"▸", "?", "·", "✓", "", "", "", "", "", "", "", ""}
+var asc = marks{">", "-", "+", "x", "!", ".", "~", "-", "-", "+", "+", "-", "|", "--", "...",
+	">", "?", ".", "+", "", "", "", "", "", "", "", ""}
+
+// word puts a theme word in front of a text, or returns the text alone.
+func word(w, text string) string {
+	if w == "" {
+		return text
+	}
+	if text == "" {
+		return w
+	}
+	return w + " " + text
+}
 
 var labelRe = regexp.MustCompile(`^\[(run|tool|done|error|warn|note|think|wait|todo|step|end)\](?: (.*)|)$`)
 var todoRe = regexp.MustCompile(`^(\d+)/(\d+) (pending|active|done|dropped)(?: (.*))?$`)
@@ -71,11 +96,7 @@ type Renderer struct {
 // NewRenderer picks marks for the terminal and sets the wrap width used
 // by markdown rendering.
 func NewRenderer(ascii bool, width int) *Renderer {
-	m := uni
-	if ascii {
-		m = asc
-	}
-	return &Renderer{m: m, width: width}
+	return &Renderer{m: cur.Marks(ascii), width: width}
 }
 
 // SetWidth changes the markdown wrap width; the renderer is rebuilt lazily.
@@ -98,42 +119,50 @@ func (r *Renderer) Line(raw string) []string {
 	case "tool":
 		out = append(out, r.air()...)
 		name, args := splitFirst(rest)
-		body := r.m.step + " " + stDim.Render(name)
+		body := r.m.step + " " + stDim.Render(word(cur.Words.Tool, name))
 		if args != "" {
 			body += " " + args
 		}
 		out = append(out, stDim.Render(r.m.tl+r.m.h)+" "+body)
 		r.openCards++
 	case "done":
-		out = append(out, r.closer(stOK.Render(r.m.done)+" "+stDim.Render(rest)))
+		done := rest
+		if cur.Words.Done != "" {
+			done = strings.TrimSpace(rest + " " + cur.Words.Done)
+		}
+		out = append(out, r.closer(stOK.Render(r.m.done)+" "+stDim.Render(done)))
 	case "error":
-		out = append(out, r.closer(stErr.Render(r.m.err+" "+rest)))
+		out = append(out, r.closer(stErr.Render(r.m.err+" "+word(cur.Words.Error, rest))))
 	case "warn":
-		out = append(out, r.side(stWarn.Render(r.m.warn+" "+rest)))
+		out = append(out, r.side(stWarn.Render(r.m.warn+" "+word(cur.Words.Warn, rest))))
 	case "note":
-		out = append(out, r.side(stDim.Render(rest)))
+		out = append(out, r.side(stDim.Render(word(cur.Words.Note, rest))))
 	case "think":
-		out = append(out, r.divider(stDim.Render(r.m.idle+" think"+optional(rest)))...)
+		out = append(out, r.divider(stThink.Render(r.m.idle+" "+cur.Words.Think+optional(rest)))...)
 	case "wait":
 		kind, text := splitFirst(rest)
 		kind = strings.TrimSuffix(kind, ":")
-		body := stWarn.Render(r.m.wait+" waiting") + " " + stDim.Render("("+kind+")")
+		body := stWarn.Render(r.m.wait+" "+cur.Words.Wait) + " " + stDim.Render("("+kind+")")
 		if text != "" {
 			body += " " + text
 		}
 		out = append(out, r.side(body))
 	case "step":
-		out = append(out, r.side(stDim.Render("now")+" "+rest))
+		out = append(out, r.side(stDim.Render(cur.Words.Step)+" "+rest))
 	case "run":
 		if strings.HasPrefix(rest, "result ") {
 			res := strings.TrimPrefix(rest, "result ")
 			if isGoodResult(res) {
-				out = append(out, r.side(stOK.Render(r.m.done)+" "+stDim.Render("result "+res)))
+				out = append(out, r.side(stOK.Render(r.m.done)+" "+stDim.Render(word(cur.Words.ResultOK, "result "+res))))
 			} else {
 				out = append(out, r.side(stWarn.Render(r.m.warn+" result "+res)))
 			}
 		} else {
-			out = append(out, r.side(stDim.Render("run "+rest)))
+			launch := ""
+			if r.m.launch != "" {
+				launch = stHead.Render(r.m.launch) + " "
+			}
+			out = append(out, r.side(launch+stDim.Render(word(cur.Words.Run, rest))))
 		}
 	case "end":
 		kind, _ := splitFirst(rest)
@@ -165,7 +194,7 @@ func (r *Renderer) Flush() []string { return r.flushProse() }
 func (r *Renderer) Preview(partial string) string {
 	line := clean(partial)
 	if r.thinking {
-		return stDim.Render(line)
+		return stThink.Render(line)
 	}
 	return line
 }
@@ -174,7 +203,7 @@ func (r *Renderer) plain(line string) []string {
 	r.prevTodo = false
 	if r.thinking {
 		r.started = true
-		return []string{stDim.Render(line)}
+		return []string{stThink.Render(line)}
 	}
 	if r.Markdown {
 		// Prose is held until the next label line so a paragraph run,
@@ -262,7 +291,7 @@ func (r *Renderer) divider(body string) []string {
 func (r *Renderer) todoRow(rest string) []string {
 	var out []string
 	if !r.prevTodo {
-		out = append(out, r.divider(stDim.Render(r.m.step+" plan"))...)
+		out = append(out, r.divider(stDim.Render(r.m.step+" "+cur.Words.Plan))...)
 	}
 	r.prevTodo = true
 	m := todoRe.FindStringSubmatch(rest)
@@ -273,13 +302,13 @@ func (r *Renderer) todoRow(rest string) []string {
 	text := m[4]
 	switch m[3] {
 	case "done":
-		out = append(out, r.side(stOK.Render(r.m.done)+" "+stDim.Render(pos+" "+text)))
+		out = append(out, r.side(stOK.Render(r.m.lit)+" "+stDim.Render(pos+" "+text)))
 	case "active":
-		out = append(out, r.side(stHead.Render(r.m.head)+" "+stDim.Render(pos)+" "+stBold.Render(text)))
+		out = append(out, r.side(stHead.Render(r.m.active)+" "+stDim.Render(pos)+" "+stBold.Render(text)))
 	case "dropped":
 		out = append(out, r.side(stDim.Render(r.m.drop+" "+pos+" "+text)))
 	default:
-		out = append(out, r.side(stDim.Render(r.m.idle+" "+pos+" "+text)))
+		out = append(out, r.side(stDim.Render(r.m.pending+" "+pos+" "+text)))
 	}
 	return out
 }

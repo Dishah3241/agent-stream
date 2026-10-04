@@ -23,7 +23,8 @@ import (
 
 const usage = `agent-stream-watch: watch agent-stream run records
 
-  agent-stream-watch [--ascii] [--once] [ROOT_OR_RECORD...]
+  agent-stream-watch [--ascii] [--once] [--theme NAME|PATH] [--loudness LEVEL]
+                     [--no-eggs] [ROOT_OR_RECORD...]
 
 ROOT is a directory of run records; the default is $AGENT_STREAM_HOME/runs
 (AGENT_STREAM_HOME defaults to ~/.agent-stream). A RECORD is one run
@@ -37,8 +38,17 @@ Run keys: arrows, pgup/pgdn, ctrl+u/ctrl+d scroll, g/G top and end (end
 follows the tail), p plan panel, m markdown for finished prose, esc back
 to the fleet, q quits.
 
+Themes: --theme or AGENT_STREAM_THEME picks a design (space, observatory,
+blueprint, radio, bottling, plain, project, or a path); --loudness or
+AGENT_STREAM_LOUDNESS picks loud, balanced, or quiet. Without either, the
+project's .agent-stream/config.json decides, at the git top level of the
+current directory; without that, space at loud. A plain terminal always
+gets the base look. --no-eggs or AGENT_STREAM_EGGS=0 turns easter eggs off.
+See themes/README.md.
+
 Environment: NO_COLOR, AGENT_RUN_COLOR=never|always, TERM=dumb and a
-non-UTF-8 locale (ASCII marks), COLUMNS (width of the printed table).
+non-UTF-8 locale (ASCII marks), COLUMNS (width of the printed table),
+AGENT_STREAM_THEMES (extra theme folders, colon-separated).
 `
 
 func main() {
@@ -50,6 +60,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	ascii := fs.Bool("ascii", false, "ASCII marks and borders")
 	once := fs.Bool("once", false, "print the fleet table once and exit")
+	themeFlag := fs.String("theme", "", "theme name or file")
+	loudFlag := fs.String("loudness", "", "loud, balanced, or quiet")
+	noEggs := fs.Bool("no-eggs", false, "turn easter eggs off")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -72,6 +85,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		tty = term.IsTerminal(int(f.Fd()))
 	}
 	profile := colorProfile(stdout, tty)
+	theme, err := chooseTheme(*themeFlag, *loudFlag, profile, useASCII, *noEggs)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-stream-watch: %v; using the base look\n", err)
+	}
+	Use(theme)
 
 	if *once || !tty {
 		now := time.Now()
@@ -100,19 +118,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// chooseTheme applies the resolution order: flags, then the environment,
+// then the project's .agent-stream/config.json, then space at loud.
+func chooseTheme(flagTheme, flagLoud string, profile colorprofile.Profile, ascii, noEggs bool) (*Theme, error) {
+	wd, _ := os.Getwd()
+	c, perr := ProjectChoice(wd)
+	if v := os.Getenv("AGENT_STREAM_THEME"); v != "" {
+		c.Theme = v
+	}
+	if v := os.Getenv("AGENT_STREAM_LOUDNESS"); v != "" {
+		c.Loudness = v
+	}
+	if flagTheme != "" {
+		c.Theme = flagTheme
+	}
+	if flagLoud != "" {
+		c.Loudness = flagLoud
+	}
+	t, err := ResolveTheme(c, profile, ascii, noEggs)
+	if err == nil {
+		err = perr
+	}
+	return t, err
+}
+
 // FleetTable is the non-interactive fleet: a heading line and one row per
 // run, open runs first, then every ended run.
 func FleetTable(runs []*Run, now time.Time, ascii bool, width int) string {
-	mk := uni
-	if ascii {
-		mk = asc
-	}
+	mk := cur.Marks(ascii)
 	if len(runs) == 0 {
 		return "no runs\n"
 	}
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(FleetHead(width, false), " ") + "\n")
-	for _, l := range FleetLines(runs, now, mk, width, "", false) {
+	for _, l := range FleetLines(runs, now, mk, width, "", false, 0) {
 		b.WriteString(strings.TrimRight(l, " ") + "\n")
 	}
 	return b.String()

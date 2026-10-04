@@ -51,6 +51,9 @@ type model struct {
 	now      func() time.Time
 	ascii    bool
 	mk       marks
+	frame    int      // ticks since start; drives loud themes' motion
+	keys     []string // the last keys pressed, for the hyperspace sequence
+	warp     int      // ticks of hyperspace left
 
 	// The open run.
 	dir      string
@@ -68,10 +71,7 @@ type model struct {
 
 func newModel(roots []string, ascii bool, now func() time.Time) *model {
 	m := &model{roots: roots, ascii: ascii, now: now, showPlan: true}
-	m.mk = uni
-	if ascii {
-		m.mk = asc
-	}
+	m.mk = cur.Marks(ascii)
 	m.vp = viewport.New()
 	m.runs = Refresh(nil, roots, now())
 	if v := m.visible(); len(v) > 0 {
@@ -97,11 +97,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tickMsg:
+		m.frame++
+		if m.warp > 0 {
+			m.warp--
+		}
 		m.refresh()
 		return m, tick()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if m.hyperspace(msg.String()) {
+			return m, nil
 		}
 		if m.mode == fleetMode {
 			return m.fleetKey(msg)
@@ -208,9 +215,12 @@ func (m *model) fleetKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // fleetRows is how many table rows fit: title, rule, column heads, rule,
-// and one key line take five.
+// and one key line take five, and a background band one more.
 func (m *model) fleetRows() int {
 	n := m.height - 5
+	if cur.Features.Background != "" {
+		n--
+	}
 	if n < 1 {
 		n = 1
 	}
@@ -227,11 +237,24 @@ func (m *model) fleetView() string {
 		}
 	}
 	ended := len(m.runs) - open
-	title := stBold.Render("agent-stream") + stDim.Render(fmt.Sprintf(" %s %d open %s %d ended %s %s",
-		m.mk.sep, open, m.mk.sep, ended, m.mk.sep, tildeList(m.roots)))
-	lines := []string{fit(title, m.width), m.rule(), fit(stDim.Render(FleetHead(m.width, true)), m.width)}
+	title := stBold.Render(cur.Words.FleetTitle)
+	if cur.Name == "base" {
+		title += stDim.Render(fmt.Sprintf(" %s %d open %s %d ended %s %s",
+			m.mk.sep, open, m.mk.sep, ended, m.mk.sep, tildeList(m.roots)))
+	} else {
+		title += stDim.Render(fmt.Sprintf("  %d %s %s %d %s %s %s",
+			open, cur.State("running"), m.mk.sep, ended, cur.State("ended"), m.mk.sep, tildeList(m.roots)))
+	}
+	if egg := FleetEgg(m.runs, now); egg != "" {
+		title += "  " + stEgg.Render(egg)
+	}
+	lines := []string{fit(title, m.width)}
+	if band := m.band(0, 0.3); band != "" {
+		lines = append(lines, band)
+	}
+	lines = append(lines, m.rule(), fit(stDim.Render(FleetHead(m.width, true)), m.width))
 
-	body := FleetLines(rows, now, m.mk, m.width, m.sel, true)
+	body := FleetLines(rows, now, m.mk, m.width, m.sel, true, m.frame)
 	if len(rows) == 0 {
 		body = []string{stDim.Render("  no runs yet under " + tildeList(m.roots)),
 			stDim.Render("  start one with: agent-stream run --agent claude --task \"" + m.mk.ell + "\"")}
@@ -257,8 +280,8 @@ func (m *model) fleetView() string {
 	for _, l := range shown {
 		lines = append(lines, fit(l, m.width))
 	}
-	for len(lines) < m.height-2 {
-		lines = append(lines, "")
+	for row := 1; len(lines) < m.height-2; row++ {
+		lines = append(lines, m.band(row, 0.3))
 	}
 	which := fmt.Sprintf("a all ended (showing %d recent)", recentEnded)
 	if m.allEnded {
@@ -270,20 +293,37 @@ func (m *model) fleetView() string {
 }
 
 // Column widths of the fleet table for a terminal width.
-type columns struct{ state, project, agent, plan, elapsed, now int }
+type columns struct{ ship, state, project, agent, plan, elapsed, now int }
 
 func fleetColumns(width int) columns {
 	c := columns{state: 9, project: 24, agent: 22, plan: 5, elapsed: 7}
+	for _, w := range cur.Words.States {
+		if l := lipgloss.Width(w); l > c.state && l <= 12 {
+			c.state = l
+		}
+	}
+	if cur.Features.Callsigns {
+		c.ship = 10
+	}
+	if cur.Features.Gauge != "" {
+		c.plan = 13
+	}
 	if width < 110 {
 		c.agent = 0
 	}
 	if width < 80 {
 		c.project = 16
 	}
+	if width < 70 {
+		c.ship = 0
+	}
 	// prefix 2, mark 2, and one space after each column.
 	used := 2 + 2 + c.state + 1 + c.project + 1 + c.plan + 1 + c.elapsed + 1
 	if c.agent > 0 {
 		used += c.agent + 1
+	}
+	if c.ship > 0 {
+		used += c.ship + 1
 	}
 	c.now = width - used
 	if c.now < 10 {
@@ -300,25 +340,34 @@ func FleetHead(width int, prefix bool) string {
 	if prefix {
 		b.WriteString("  ")
 	}
+	col := cur.Words.Columns
 	b.WriteString("  ")
-	b.WriteString(cell("STATE", c.state, mk) + " ")
-	b.WriteString(cell("PROJECT", c.project, mk) + " ")
-	if c.agent > 0 {
-		b.WriteString(cell("AGENT", c.agent, mk) + " ")
+	if c.ship > 0 {
+		b.WriteString(cell(col["ship"], c.ship, mk) + " ")
 	}
-	b.WriteString(cell("PLAN", c.plan, mk) + " ")
-	b.WriteString(cellRight("ELAPSED", c.elapsed, mk) + " ")
-	b.WriteString("NOW")
+	b.WriteString(cell(col["state"], c.state, mk) + " ")
+	b.WriteString(cell(col["project"], c.project, mk) + " ")
+	if c.agent > 0 {
+		b.WriteString(cell(col["agent"], c.agent, mk) + " ")
+	}
+	b.WriteString(cell(col["plan"], c.plan, mk) + " ")
+	b.WriteString(cellRight(col["elapsed"], c.elapsed, mk) + " ")
+	b.WriteString(col["now"])
 	return b.String()
 }
 
 // FleetLines renders one line per run. sel marks the selected row when
 // prefix is set (the interactive view); the printed table has no prefix.
-func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, prefix bool) []string {
+func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, prefix bool, frame int) []string {
 	c := fleetColumns(width)
 	var out []string
 	for _, r := range runs {
 		mark, st, word := runMark(r, mk)
+		if r.Open() && r.State != nil && r.State.Waiting != nil && cur.Features.HoldingSpinner && cur.Animated() {
+			if orbit := []rune(mk.orbit); len(orbit) > 0 {
+				mark = string(orbit[frame%len(orbit)])
+			}
+		}
 		var b strings.Builder
 		if prefix {
 			if r.Dir == sel {
@@ -326,6 +375,10 @@ func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, pre
 			} else {
 				b.WriteString("  ")
 			}
+		}
+		if c.ship > 0 {
+			id := runID(r)
+			b.WriteString(cur.ShipStyle(id).Render(cell(cur.Callsign(id), c.ship, mk)) + " ")
 		}
 		b.WriteString(st.Render(mark) + " ")
 		b.WriteString(st.Render(cell(word, c.state, mk)) + " ")
@@ -337,9 +390,9 @@ func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, pre
 		if c.agent > 0 {
 			b.WriteString(stDim.Render(cell(agentModel(r), c.agent, mk)) + " ")
 		}
-		b.WriteString(cell(planCell(r), c.plan, mk) + " ")
+		b.WriteString(planGauge(r, mk, c.plan) + " ")
 		b.WriteString(cellRight(Duration(int64(r.Elapsed(now)/time.Second)), c.elapsed, mk) + " ")
-		nowText := Shorten(quietPrefix(r, now, mk)+r.Now(), c.now, mk)
+		nowText := Shorten(quietPrefix(r, now, mk)+r.Now()+runNowEgg(r, now), c.now, mk)
 		if !r.Open() {
 			nowText = stDim.Render(nowText)
 		}
@@ -354,26 +407,26 @@ func runMark(r *Run, mk marks) (string, lipgloss.Style, string) {
 	s := r.State
 	switch {
 	case s == nil:
-		return mk.idle, stDim, "unknown"
+		return mk.idle, stDim, cur.State("unknown")
 	case s.Status == "ended":
 		switch r.OutcomeKind() {
 		case "success":
-			return mk.done, stOK, "success"
+			return mk.done, stOK, cur.State("success")
 		case "failed", "error":
-			return mk.err, stErr, r.OutcomeKind()
+			return mk.err, stErr, cur.State(r.OutcomeKind())
 		case "cancelled":
-			return mk.warn, stWarn, "cancelled"
+			return mk.warn, stWarn, cur.State("cancelled")
 		case "":
-			return mk.idle, stDim, "ended"
+			return mk.idle, stDim, cur.State("ended")
 		default:
-			return mk.idle, stDim, r.OutcomeKind()
+			return mk.idle, stDim, cur.State(r.OutcomeKind())
 		}
 	case s.Waiting != nil || s.Status == "waiting":
-		return mk.wait, stWarn, "waiting"
+		return mk.wait, stWarn, cur.State("waiting")
 	case s.Status == "starting":
-		return mk.idle, stDim, "starting"
+		return mk.idle, stDim, cur.State("starting")
 	default:
-		return mk.head, stHead, "running"
+		return mk.head, stHead, cur.State("running")
 	}
 }
 
@@ -399,7 +452,7 @@ func quietPrefix(r *Run, now time.Time, mk marks) string {
 	if d < quietAfter {
 		return ""
 	}
-	return "quiet " + Duration(int64(d/time.Second)) + " " + mk.sep + " "
+	return cur.Words.Quiet + " " + Duration(int64(d/time.Second)) + " " + mk.sep + " "
 }
 
 // -------------------------------------------------------------------- run --
@@ -586,6 +639,9 @@ func (m *model) headerLines(r *Run) []string {
 	s := r.State
 	mark, st, _ := runMark(r, m.mk)
 	left := st.Render(mark) + " " + stBold.Render(r.Label(m.mk.sep))
+	if cs := cur.Callsign(runID(r)); cs != "" {
+		left = st.Render(mark) + " " + cur.ShipStyle(runID(r)).Render(cs) + " " + stBold.Render(r.Label(m.mk.sep))
+	}
 	var right []string
 	if am := agentModel(r); am != "" {
 		right = append(right, am)
@@ -597,12 +653,20 @@ func (m *model) headerLines(r *Run) []string {
 		first = left + strings.Repeat(" ", gap) + rightS
 	}
 	lines := []string{fit(first, m.width)}
+	if band := m.band(0, m.level(r)); band != "" {
+		lines = append([]string{band}, lines...)
+	}
 	if s.Task != "" {
-		lines = append(lines, fit("  "+stDim.Render("task")+"  "+Shorten(s.Task, m.width-8, m.mk), m.width))
+		label := cur.Words.Header["task"]
+		lines = append(lines, fit("  "+stDim.Render(label)+"  "+Shorten(s.Task, m.width-6-lipgloss.Width(label), m.mk), m.width))
 	}
 	var facts []string
 	if s.TodoCounts.Total > 0 {
-		facts = append(facts, fmt.Sprintf("plan %d/%d done", s.TodoCounts.Done, s.TodoCounts.Total))
+		if g := planGauge(r, m.mk, 24); cur.Features.Gauge != "" && g != "" {
+			facts = append(facts, strings.TrimRight(g, " ")+" "+stDim.Render(fmt.Sprintf("%s %d/%d", cur.Words.Altitude, s.TodoCounts.Done, s.TodoCounts.Total)))
+		} else {
+			facts = append(facts, fmt.Sprintf("plan %d/%d done", s.TodoCounts.Done, s.TodoCounts.Total))
+		}
 	}
 	t := Count(s.Counts.Tools, "tool")
 	if s.Counts.ToolErrors > 0 || s.Counts.Errors > 0 {
@@ -683,12 +747,18 @@ func (m *model) footerLines(r *Run) []string {
 		now = stDim.Render(r.Now())
 	case !r.Open():
 		mark, st, word := runMark(r, m.mk)
+		if w := cur.Words.Report[r.OutcomeKind()]; w != "" && cur.Name != "base" {
+			word = w + " " + m.mk.sep + " " + r.OutcomeKind()
+		}
 		bits := []string{word}
 		if o := r.State.Outcome; o != nil && o.Exit != nil {
 			bits = append(bits, fmt.Sprintf("exit %d", *o.Exit))
 		}
 		bits = append(bits, Duration(r.State.ElapsedS))
 		now = st.Render(mark+" "+strings.Join(bits, " "+m.mk.sep+" ")) + "  " + r.Now()
+		if egg := RunEgg(r, m.now()); egg != "" {
+			now += "  " + stEgg.Render(egg)
+		}
 	default:
 		mark, st, _ := runMark(r, m.mk)
 		now = st.Render(mark) + " " + stDim.Render(quietPrefix(r, m.now(), m.mk)) + r.Now()
@@ -703,6 +773,118 @@ func (m *model) footerLines(r *Run) []string {
 	}
 	keys := strings.Join([]string{pos, "esc fleet", "p plan", md, "q quit", "record " + tilde(m.dir)}, " "+m.mk.sep+" ")
 	return []string{fit(now, m.width), fit(stDim.Render(keys), m.width)}
+}
+
+// band is one row of the theme's Background Math, or a hyperspace streak
+// while that egg runs. level is the live quantity the generator follows.
+func (m *model) band(row int, level float64) string {
+	if m.warp > 0 && cur.Egg("hyperspace") != "" {
+		return fit(warpRow(m.width, row, m.frame, m.mk), m.width)
+	}
+	return fit(cur.Background(m.mk, m.width, row, djb2(strings.Join(m.roots, ":")), m.frame, level), m.width)
+}
+
+// level is what the run view's background follows: elapsed time over six
+// hours for trails, recent activity for meters, plan progress for the belt.
+func (m *model) level(r *Run) float64 {
+	if r == nil || r.State == nil {
+		return 0
+	}
+	switch cur.Features.Background {
+	case "trails":
+		return float64(r.Elapsed(m.now())) / float64(6*time.Hour)
+	case "meters":
+		if !r.Open() {
+			return 0
+		}
+		if d := m.now().Sub(r.ModTime); d < 10*time.Second {
+			return 1 - float64(d)/float64(10*time.Second)
+		}
+		return 0.05
+	case "belt":
+		if t := r.State.TodoCounts.Total; t > 0 {
+			return float64(r.State.TodoCounts.Done) / float64(t)
+		}
+	}
+	return 0.3
+}
+
+// konami is the hyperspace sequence.
+var konami = []string{"up", "up", "down", "down", "left", "right", "left", "right", "b", "a"}
+
+// hyperspace records a key and starts the warp when the sequence completes.
+// It returns true when the key finished the sequence (and is consumed).
+func (m *model) hyperspace(k string) bool {
+	m.keys = append(m.keys, k)
+	if len(m.keys) > len(konami) {
+		m.keys = m.keys[len(m.keys)-len(konami):]
+	}
+	if len(m.keys) != len(konami) || cur.Egg("hyperspace") == "" {
+		return false
+	}
+	for i := range konami {
+		if m.keys[i] != konami[i] {
+			return false
+		}
+	}
+	m.keys = nil
+	m.warp = 3
+	return true
+}
+
+func warpRow(width, row, frame int, mk marks) string {
+	streak := mk.trail
+	if streak == "" {
+		streak = "-"
+	}
+	var b strings.Builder
+	x := uint32(row*7919 + frame*104729 + 1)
+	for col := 0; col < width; {
+		x = lcg(x)
+		n := int((x>>8)%9) + 2
+		gap := int((x>>16)%14) + 3
+		for i := 0; i < gap && col < width; i++ {
+			b.WriteByte(' ')
+			col++
+		}
+		for i := 0; i < n && col < width; i++ {
+			b.WriteString(streak)
+			col++
+		}
+	}
+	line := stSky.Render(b.String())
+	if row == 1 {
+		label := " " + cur.Egg("hyperspace") + " "
+		pad := (width - lipgloss.Width(label)) / 2
+		if pad > 0 {
+			line = stSky.Render(strings.Repeat(" ", pad)) + stEgg.Render(label)
+		}
+	}
+	return line
+}
+
+// planGauge is the plan column: the theme's gauge, or done/total.
+func planGauge(r *Run, mk marks, w int) string {
+	if r.State == nil || len(r.State.Todos) == 0 || cur.Features.Gauge == "" {
+		return cell(planCell(r), w, mk)
+	}
+	statuses := make([]string, len(r.State.Todos))
+	for i, t := range r.State.Todos {
+		statuses[i] = t.Status
+	}
+	g := cur.Gauge(mk, statuses, 1, w)
+	if pad := w - lipgloss.Width(g); pad > 0 {
+		g += strings.Repeat(" ", pad)
+	}
+	return fit(g, w)
+}
+
+// runID is the stable id for callsigns: the state's id, else the directory.
+func runID(r *Run) string {
+	if r.State != nil && r.State.ID != "" {
+		return r.State.ID
+	}
+	return filepath.Base(r.Dir)
 }
 
 // ---------------------------------------------------------------- helpers --

@@ -6,3 +6,4 @@
 __pycache__/
 *.pyc
 bin/agent-stream-watch
+cmd/agent-stream-watch/agent-stream-watch

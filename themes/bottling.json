@@ -1,0 +1,191 @@
+{
+  "schema": "agent-stream/theme/1",
+  "name": "bottling",
+  "description": "PC: a clean production line for the edamame water company. Bottles moving along the belt, each agent a bottle filling with progress. Easter eggs off unless the project turns them on.",
+  "eggs_default": false,
+  "colors": {
+    "accent": {
+      "hex": "#4FD1C5",
+      "ansi256": 79,
+      "ansi": 14
+    },
+    "dim": {
+      "faint": true
+    },
+    "ok": {
+      "hex": "#8BC34A",
+      "ansi256": 113,
+      "ansi": 10
+    },
+    "warn": {
+      "hex": "#FFC107",
+      "ansi256": 214,
+      "ansi": 11
+    },
+    "err": {
+      "hex": "#E53935",
+      "ansi256": 160,
+      "ansi": 1
+    },
+    "title": {
+      "hex": "#E8F5E9",
+      "ansi256": 194,
+      "ansi": 15,
+      "bold": true
+    },
+    "think": {
+      "hex": "#A5D6A7",
+      "ansi256": 151,
+      "ansi": 2
+    },
+    "sky": {
+      "hex": "#607D8B",
+      "ansi256": 66,
+      "ansi": 8
+    },
+    "egg": {
+      "hex": "#8BC34A",
+      "ansi256": 113,
+      "ansi": 10
+    },
+    "ships": [
+      {
+        "hex": "#8BC34A",
+        "ansi256": 113,
+        "ansi": 10
+      },
+      {
+        "hex": "#4FD1C5",
+        "ansi256": 79,
+        "ansi": 14
+      },
+      {
+        "hex": "#A5D6A7",
+        "ansi256": 151,
+        "ansi": 2
+      },
+      {
+        "hex": "#B2EBF2",
+        "ansi256": 159,
+        "ansi": 14
+      }
+    ]
+  },
+  "glyphs": {
+    "unicode": {
+      "active": "▶",
+      "lit": "●",
+      "pending": "○",
+      "dropped": "×",
+      "launch": "▶",
+      "trail": "═",
+      "ahead": "─",
+      "card_open": "▕",
+      "card_close": "▏",
+      "sky": "▯▮",
+      "field": "═",
+      "orbit": "◐◓◑◒"
+    },
+    "ascii": {
+      "active": ">",
+      "lit": "o",
+      "pending": ".",
+      "dropped": "x",
+      "launch": ">",
+      "trail": "=",
+      "ahead": "-",
+      "card_open": "[",
+      "card_close": "]",
+      "sky": "",
+      "field": "",
+      "orbit": "-\\|/"
+    }
+  },
+  "words": {
+    "tool": "fill",
+    "done": "capped",
+    "error": "spill",
+    "warn": "check valve",
+    "note": "",
+    "think": "mixing",
+    "wait": "line paused",
+    "step": "station",
+    "plan": "batch sheet",
+    "run": "line started",
+    "result_ok": "QC passed",
+    "altitude": "filled",
+    "quiet": "line idle for",
+    "fleet_title": "BOTTLING FLOOR",
+    "report_title": "BATCH REPORT",
+    "header": {
+      "task": "order",
+      "cwd": "plant",
+      "agent": "line",
+      "output": "batch records",
+      "liftoff": "line started"
+    },
+    "states": {
+      "running": "filling",
+      "waiting": "paused",
+      "starting": "rinsing",
+      "success": "shipped",
+      "failed": "recalled",
+      "error": "recalled",
+      "cancelled": "line stopped",
+      "exited": "off shift",
+      "ended": "off shift",
+      "unknown": "no reading"
+    },
+    "report": {
+      "success": "SHIPPED",
+      "failed": "RECALLED",
+      "error": "RECALLED",
+      "cancelled": "LINE STOPPED",
+      "exited": "OFF SHIFT",
+      "ended": "OFF SHIFT"
+    },
+    "columns": {
+      "ship": "LINE",
+      "state": "STATUS",
+      "project": "ORDER",
+      "agent": "OPERATOR",
+      "plan": "FILL",
+      "elapsed": "SHIFT",
+      "now": "STATION"
+    }
+  },
+  "background": {
+    "kind": "belt",
+    "density": 6
+  },
+  "gauge": "fill",
+  "features": {
+    "callsigns": true,
+    "launch_header": true,
+    "mission_report": true,
+    "twinkle": false,
+    "holding_spinner": true
+  },
+  "callsigns": {
+    "names": [
+      "POD",
+      "BEAN",
+      "SPRING",
+      "BRINE",
+      "CAP",
+      "VAT"
+    ]
+  },
+  "eggs": {
+    "answer_42": "42 bottles on the wall: the answer, apparently",
+    "amaze": "not a drop wasted",
+    "bugs": "a messy batch, but it shipped",
+    "seldon_crisis": "recalled after the halfway mark",
+    "dead_channel": "the floor is quiet; the pods are resting",
+    "fist_my_bump": "two batches shipped together",
+    "wallfacer": "one line running the night shift",
+    "midnight": "the night shift",
+    "dark_forest": "line idle (dark forest)",
+    "hyperspace": "TURBO FILL · back in a moment"
+  }
+}
