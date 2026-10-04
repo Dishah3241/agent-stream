@@ -129,6 +129,8 @@
       "liftoff": "on air"
     },
     "states": {
+      "no_signal": "dead air",
+      "dialing": "tuning",
       "running": "on air",
       "waiting": "holding",
       "starting": "mic check",
@@ -149,6 +151,7 @@
       "ended": "OFF AIR"
     },
     "columns": {
+      "machine": "STUDIO",
       "ship": "STATION",
       "state": "STATUS",
       "project": "SHOW",

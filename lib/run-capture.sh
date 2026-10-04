@@ -189,6 +189,7 @@ run_capture_state_seed() {
   printf '%s' "$1" | jq -c --arg dir "$run" --arg theme "$theme" --arg loud "$loud" '
     {id: .id, agent: .agent, model_requested: (.model_requested // null),
      task: .task,
+     parent: (.parent // null | if type == "string" then . else null end),
      project: {name: .project, dir: .cwd, branch: .branch},
      theme: {name: $theme, loudness: $loud},
      record: {dir: $dir, events: ($dir + "/events.jsonl"), display: ($dir + "/display.txt"),

@@ -124,6 +124,8 @@
       "liftoff": "pencils down"
     },
     "states": {
+      "no_signal": "off the grid",
+      "dialing": "tracing",
       "running": "drafting",
       "waiting": "for sign-off",
       "starting": "unrolling",
@@ -144,6 +146,7 @@
       "ended": "FILED"
     },
     "columns": {
+      "machine": "OFFICE",
       "ship": "DWG",
       "state": "STAGE",
       "project": "PROJECT",

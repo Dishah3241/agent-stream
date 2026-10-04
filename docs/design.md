@@ -284,6 +284,7 @@ and finalized by the capture layer with the exit status.
   "session": "1638f3b6",
   "project": {"name": "agent-stream", "dir": "/home/me/Code/agent-stream", "branch": "main"},
   "task": "Rethink and rebuild how this repository shows …",
+  "parent": null,
   "started_at": "2026-10-04T05:00:00Z",
   "updated_at": "2026-10-04T05:03:12Z",
   "ended_at": null,

@@ -40,7 +40,7 @@ const (
 )
 
 type model struct {
-	roots    []string
+	src      Source
 	runs     []*Run
 	allEnded bool
 	sel      string // selected run directory in the fleet
@@ -70,10 +70,14 @@ type model struct {
 }
 
 func newModel(roots []string, ascii bool, now func() time.Time) *model {
-	m := &model{roots: roots, ascii: ascii, now: now, showPlan: true}
+	return newSourceModel(localSource{roots}, ascii, now)
+}
+
+func newSourceModel(src Source, ascii bool, now func() time.Time) *model {
+	m := &model{src: src, ascii: ascii, now: now, showPlan: true}
 	m.mk = cur.Marks(ascii)
 	m.vp = viewport.New()
-	m.runs = Refresh(nil, roots, now())
+	m.runs = src.Refresh(nil, now())
 	if v := m.visible(); len(v) > 0 {
 		m.sel = v[0].Dir
 	}
@@ -139,7 +143,7 @@ func (m *model) render() string {
 
 // refresh re-reads the roots and, in the run view, the open display.txt.
 func (m *model) refresh() {
-	m.runs = Refresh(m.runs, m.roots, m.now())
+	m.runs = m.src.Refresh(m.runs, m.now())
 	if m.mode == runMode {
 		m.layout()
 		m.pull(false)
@@ -154,7 +158,7 @@ func (m *model) visible() []*Run {
 	var out []*Run
 	ended := 0
 	for _, r := range m.runs {
-		if r.Open() {
+		if r.Open() || r.Signal != nil {
 			out = append(out, r)
 			continue
 		}
@@ -164,7 +168,7 @@ func (m *model) visible() []*Run {
 		ended++
 		out = append(out, r)
 	}
-	return out
+	return Nest(out)
 }
 
 func (m *model) cursor(rows []*Run) int {
@@ -203,7 +207,7 @@ func (m *model) fleetKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		rows = m.visible()
 		c = m.cursor(rows)
 	case "enter", "l", "right":
-		if len(rows) > 0 {
+		if len(rows) > 0 && rows[clamp(c, 0, len(rows)-1)].Signal == nil {
 			m.openRun(rows[clamp(c, 0, len(rows)-1)].Dir)
 		}
 		return m, nil
@@ -236,14 +240,19 @@ func (m *model) fleetView() string {
 			open++
 		}
 	}
-	ended := len(m.runs) - open
+	ended := 0
+	for _, r := range m.runs {
+		if !r.Open() && r.Signal == nil {
+			ended++
+		}
+	}
 	title := stBold.Render(cur.Words.FleetTitle)
 	if cur.Name == "base" {
 		title += stDim.Render(fmt.Sprintf(" %s %d open %s %d ended %s %s",
-			m.mk.sep, open, m.mk.sep, ended, m.mk.sep, tildeList(m.roots)))
+			m.mk.sep, open, m.mk.sep, ended, m.mk.sep, m.src.Describe()))
 	} else {
 		title += stDim.Render(fmt.Sprintf("  %d %s %s %d %s %s %s",
-			open, cur.State("running"), m.mk.sep, ended, cur.State("ended"), m.mk.sep, tildeList(m.roots)))
+			open, cur.State("running"), m.mk.sep, ended, cur.State("ended"), m.mk.sep, m.src.Describe()))
 	}
 	if egg := FleetEgg(m.runs, now); egg != "" {
 		title += "  " + stEgg.Render(egg)
@@ -256,7 +265,7 @@ func (m *model) fleetView() string {
 
 	body := FleetLines(rows, now, m.mk, m.width, m.sel, true, m.frame)
 	if len(rows) == 0 {
-		body = []string{stDim.Render("  no runs yet under " + tildeList(m.roots)),
+		body = []string{stDim.Render("  no runs yet under " + m.src.Describe()),
 			stDim.Render("  start one with: agent-stream run --agent claude --task \"" + m.mk.ell + "\"")}
 	}
 	n := m.fleetRows()
@@ -293,7 +302,10 @@ func (m *model) fleetView() string {
 }
 
 // Column widths of the fleet table for a terminal width.
-type columns struct{ ship, state, project, agent, plan, elapsed, now int }
+type columns struct{ machine, ship, state, project, agent, plan, elapsed, now int }
+
+// machineWidth is the MACHINE column's width: zero except on a board.
+var machineWidth int
 
 func fleetColumns(width int) columns {
 	c := columns{state: 9, project: 24, agent: 22, plan: 5, elapsed: 7}
@@ -317,6 +329,7 @@ func fleetColumns(width int) columns {
 	if width < 70 {
 		c.ship = 0
 	}
+	c.machine = machineWidth
 	// prefix 2, mark 2, and one space after each column.
 	used := 2 + 2 + c.state + 1 + c.project + 1 + c.plan + 1 + c.elapsed + 1
 	if c.agent > 0 {
@@ -324,6 +337,9 @@ func fleetColumns(width int) columns {
 	}
 	if c.ship > 0 {
 		used += c.ship + 1
+	}
+	if c.machine > 0 {
+		used += c.machine + 1
 	}
 	c.now = width - used
 	if c.now < 10 {
@@ -341,10 +357,13 @@ func FleetHead(width int, prefix bool) string {
 		b.WriteString("  ")
 	}
 	col := cur.Words.Columns
-	b.WriteString("  ")
+	if c.machine > 0 {
+		b.WriteString(cell(col["machine"], c.machine, mk) + " ")
+	}
 	if c.ship > 0 {
 		b.WriteString(cell(col["ship"], c.ship, mk) + " ")
 	}
+	b.WriteString("  ") // the mark
 	b.WriteString(cell(col["state"], c.state, mk) + " ")
 	b.WriteString(cell(col["project"], c.project, mk) + " ")
 	if c.agent > 0 {
@@ -361,13 +380,8 @@ func FleetHead(width int, prefix bool) string {
 func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, prefix bool, frame int) []string {
 	c := fleetColumns(width)
 	var out []string
-	for _, r := range runs {
-		mark, st, word := runMark(r, mk)
-		if r.Open() && r.State != nil && r.State.Waiting != nil && cur.Features.HoldingSpinner && cur.Animated() {
-			if orbit := []rune(mk.orbit); len(orbit) > 0 {
-				mark = string(orbit[frame%len(orbit)])
-			}
-		}
+	lastMachine := ""
+	for i, r := range runs {
 		var b strings.Builder
 		if prefix {
 			if r.Dir == sel {
@@ -376,13 +390,34 @@ func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, pre
 				b.WriteString("  ")
 			}
 		}
+		if c.machine > 0 {
+			// The name heads its group; the rows under it leave it blank.
+			name := ""
+			if i == 0 || r.Machine != lastMachine {
+				name = r.Machine
+			}
+			lastMachine = r.Machine
+			b.WriteString(stBold.Render(cell(name, c.machine, mk)) + " ")
+		}
+		if r.Signal != nil {
+			b.WriteString(signalLine(r.Signal, c, now, mk))
+			out = append(out, b.String())
+			continue
+		}
+		mark, st, word := runMark(r, mk)
+		if r.Open() && r.State != nil && r.State.Waiting != nil && cur.Features.HoldingSpinner && cur.Animated() {
+			if orbit := []rune(mk.orbit); len(orbit) > 0 {
+				mark = string(orbit[frame%len(orbit)])
+			}
+		}
 		if c.ship > 0 {
 			id := runID(r)
-			b.WriteString(cur.ShipStyle(id).Render(cell(cur.Callsign(id), c.ship, mk)) + " ")
+			t := RowTheme(r)
+			b.WriteString(t.ShipStyle(id).Render(cell(t.Callsign(id), c.ship, mk)) + " ")
 		}
 		b.WriteString(st.Render(mark) + " ")
 		b.WriteString(st.Render(cell(word, c.state, mk)) + " ")
-		label := cell(r.Label(mk.sep), c.project, mk)
+		label := cell(nestPrefix(r.Depth, mk)+r.Label(mk.sep), c.project, mk)
 		if prefix && r.Dir == sel {
 			label = stBold.Render(label)
 		}
@@ -400,6 +435,46 @@ func FleetLines(runs []*Run, now time.Time, mk marks, width int, sel string, pre
 		out = append(out, b.String())
 	}
 	return out
+}
+
+// nestPrefix indents a child run under its parent.
+func nestPrefix(depth int, mk marks) string {
+	if depth <= 0 {
+		return ""
+	}
+	if depth > 4 {
+		depth = 4
+	}
+	hook := "└ "
+	if mk.ell == asc.ell {
+		hook = "`- "
+	}
+	return strings.Repeat("  ", depth-1) + hook
+}
+
+// signalLine is the rest of a board machine's row while it is dialing or
+// has no signal: the state, and when it last answered.
+func signalLine(s *Signal, c columns, now time.Time, mk marks) string {
+	var b strings.Builder
+	if c.ship > 0 {
+		b.WriteString(cell("", c.ship, mk) + " ")
+	}
+	if s.Err == "" {
+		b.WriteString(stDim.Render(mk.idle+" "+cell(cur.State("dialing"), c.state, mk)) + " ")
+		b.WriteString(stDim.Render(cell("ssh "+s.Machine, c.project, mk)))
+		return b.String()
+	}
+	b.WriteString(stWarn.Render(mk.warn+" "+cell(cur.State("no_signal"), c.state, mk)) + " ")
+	when := "never answered"
+	if !s.Answered.IsZero() {
+		when = "last answered " + Duration(int64(now.Sub(s.Answered)/time.Second)) + " ago"
+	}
+	rest := c.project + 1 + c.plan + 1 + c.elapsed + 1 + c.now
+	if c.agent > 0 {
+		rest += c.agent + 1
+	}
+	b.WriteString(stDim.Render(Shorten(when+" "+mk.sep+" "+s.Err, rest, mk)))
+	return b.String()
 }
 
 // runMark is a run's mark, its style, and one word for its state.
@@ -512,7 +587,7 @@ func (m *model) runKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // pull reads what was appended to display.txt and renders it. force sets
 // the viewport content even when nothing new arrived.
 func (m *model) pull(force bool) {
-	lines, off, part, reset, err := Tail(m.dir, m.offset, m.partial)
+	lines, off, part, reset, err := m.src.Tail(m.dir, m.offset, m.partial)
 	m.tailErr = err
 	if reset {
 		// The file shrank and was read again from the start.
@@ -782,7 +857,15 @@ func (m *model) band(row int, level float64) string {
 	if m.warp > 0 && cur.Egg("hyperspace") != "" {
 		return fit(warpRow(m.width, row, m.frame, m.mk), m.width)
 	}
-	return fit(cur.Background(m.mk, m.width, row, djb2(strings.Join(m.roots, ":")), m.frame, level), m.width)
+	return fit(cur.Background(m.mk, m.width, row, djb2(sourceSeed(m.src)), m.frame, level), m.width)
+}
+
+// sourceSeed seeds the fleet background: the roots, or the board's machines.
+func sourceSeed(src Source) string {
+	if l, ok := src.(localSource); ok {
+		return strings.Join(l.roots, ":")
+	}
+	return src.Describe()
 }
 
 // level is what the run view's background follows: elapsed time over six

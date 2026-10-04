@@ -112,6 +112,7 @@ bin/agent-stream run --format pi-json --task "…" -- pi --mode json -p "…"
 bin/agent-stream follow ~/.agent-stream/runs/<id>     # replay, or tail while open
 bin/agent-stream state  ~/.agent-stream/runs/<id>     # print state.json (--rebuild from display.txt)
 bin/agent-stream watch                                # the watcher over every run (see below)
+bin/agent-stream board                                # the watcher over every machine (see below)
 ```
 
 `run` builds `header.json` (task in full, project and branch detected from git, agent, model requested), creates the record under `$AGENT_STREAM_HOME/runs/<id>` (default `~/.agent-stream`), runs the worker through the capture layer, writes the `exit` and `capture` markers, prints the ending card, and exits with the worker's status. `--agent` picks the format and a default worker command; a command after `--` always wins. Only the `claude` default was verified against a real run; see `agent-stream help`.
@@ -205,6 +206,24 @@ The run view pins the project, task, plan progress, tool and error counts, and t
 
 The watcher honors `NO_COLOR`, `AGENT_RUN_COLOR`, `TERM=dumb`, and the locale like the pane does; `--ascii` forces ASCII marks. `AGENT_STREAM_WATCH` points `agent-stream watch` at a binary elsewhere.
 
+### The board
+
+`agent-stream board` is the watcher over several machines at once. It reads `~/.config/agent-stream/board.json` (or a file named first):
+
+```json
+{ "machines": [
+    { "name": "forge", "ssh": "forge.local", "root": "~/.agent-stream/runs" },
+    { "name": "miini" },
+    { "name": "here", "local": true }
+] }
+```
+
+`ssh` defaults to the name, so a `Host miini` entry in `~/.ssh/config` is all a machine needs; `root` defaults to `~/.agent-stream/runs`; `local` reads this machine's root without ssh. Each machine is one shared OpenSSH connection (`ControlMaster`, socket under the user's cache directory), polled every two seconds in the background by a small POSIX shell command that prints the `state.json` files changed since the last poll. Opening a run reads its `display.txt` with `tail -c +OFFSET`. Nothing is installed on the machines, and nothing is written to them. `AGENT_STREAM_SSH` replaces the `ssh` command.
+
+The fleet gains a MACHINE column, rows grouped by machine in the file's order, and each row keeps its own project's theme for its callsign and color while the board's own theme draws the rest. A machine that does not answer is one "no signal" row with when it last answered and why; the rest of the board keeps working.
+
+Runs nest. `agent-stream run` exports `AGENT_STREAM_PARENT` (its record directory) to its worker, so an `agent-stream run` the worker starts, directly or through a skill's `herdr agent run`, records it as `parent` in `header.json` and `state.json`. If the environment does not get through, pass `--parent DIR`. The watcher and the board show a child indented under its parent when both are listed.
+
 ## Themes
 
 Each project picks how its panes and watcher look with a committed `.agent-stream/config.json`:
@@ -251,6 +270,8 @@ Themes are presentation only: `display.txt` and `state.json` are identical under
 | `AGENT_STREAM_EGGS=0` | Turns easter eggs off |
 | `AGENT_STREAM_ACP_PERMISSION`, `AGENT_STREAM_ACP_VERSION`, `AGENT_STREAM_ACP_GRACE` | ACP bridge policy: `allow` (default) or `deny`; protocol version offered (default 2); seconds to wait for the agent to exit (default 10) |
 | `AGENT_STREAM_WATCH` | The watcher binary `agent-stream watch` runs (default: `bin/agent-stream-watch`, then `PATH`) |
+| `AGENT_STREAM_PARENT` | Set by `agent-stream run` for its worker: the record of the run a nested run belongs to (`--parent` overrides) |
+| `AGENT_STREAM_SSH` | The ssh command the board runs (default `ssh`), split on spaces |
 
 ## Where the names come from
 

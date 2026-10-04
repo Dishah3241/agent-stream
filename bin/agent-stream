@@ -9,6 +9,9 @@
 #   agent-stream present              < activity lines
 #   agent-stream watch [--ascii] [--once] [ROOT_OR_RECORD...]
 #                                     the Bubble Tea watcher over the records
+#   agent-stream board [BOARD_JSON] [watcher flags]
+#                                     the watcher over every machine in
+#                                     board.json, read over SSH
 #   agent-stream acp-bridge --task T [--cwd D] -- acp-agent argv...
 #   agent-stream help
 #
@@ -28,6 +31,9 @@
 #                    AGENT_STREAM_HOME defaults to ~/.agent-stream)
 #   --id ID          record id (default: UTC timestamp plus random suffix)
 #   --label TEXT     short label for the run (default: first line of the task)
+#   --parent DIR     the record of the run that started this one (default:
+#                    $AGENT_STREAM_PARENT, which every run exports to its
+#                    worker, so a nested agent-stream run finds its parent)
 #
 # Exit status: the worker's. Bash 3.2 compatible; needs jq.
 set -u
@@ -285,7 +291,7 @@ as_acp_wrap() {
 
 as_cmd_run() {
   local agent="" format="" task="" task_file="" project="" cwd="" model=""
-  local dir="" id="" label="" have_argv=0 home top branch
+  local dir="" id="" label="" parent="${AGENT_STREAM_PARENT:-}" have_argv=0 home top branch
   AS_ARGV=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -299,6 +305,7 @@ as_cmd_run() {
       --dir) dir="${2:-}"; shift 2 ;;
       --id) id="${2:-}"; shift 2 ;;
       --label) label="${2:-}"; shift 2 ;;
+      --parent) parent="${2:-}"; shift 2 ;;
       --) shift; have_argv=1; AS_ARGV=("$@"); break ;;
       -h|--help) as_usage; return 0 ;;
       *) as_die "unknown run option: $1 (see agent-stream help)" ;;
@@ -328,6 +335,12 @@ as_cmd_run() {
   fi
   mkdir -p "$dir" || as_die "cannot create $dir"
   dir="$(cd "$dir" && pwd)"
+  # A parent is a record directory; anything else (or this run itself) is
+  # dropped rather than recorded wrong.
+  case "$parent" in
+    /*) [[ "$parent" != "$dir" ]] || parent="" ;;
+    *) parent="" ;;
+  esac
   if [[ -z "$project" ]]; then
     top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
     project="$(basename "${top:-$cwd}")"
@@ -338,7 +351,7 @@ as_cmd_run() {
   [[ -n "$agent" ]] || agent="$(. "$AS_LIB/run-capture.sh"; run_capture_agent_for_format "$format")"
   jq -n --arg id "$id" --arg agent "$agent" --arg label "$label" --arg cwd "$cwd" \
         --arg dir "$dir" --arg model "$model" --arg project "$project" --arg branch "$branch" \
-        --arg task "$task" --arg format "$format" '
+        --arg task "$task" --arg format "$format" --arg parent "$parent" '
     {id: $id, agent: (if $agent == "" then null else $agent end),
      label: (if $label == "" then null else $label end),
      cwd: $cwd, dir: $dir,
@@ -346,13 +359,16 @@ as_cmd_run() {
      model_source: (if $model == "" then null else "agent-stream --model" end),
      project: $project, branch: (if $branch == "" then null else $branch end),
      task: (if $task == "" then null else $task end), format: $format,
+     parent: (if $parent == "" then null else $parent end),
      created: (now | todate)}' >"$dir/header.json" || as_die "cannot write header"
 
   (
     set +e
     run="$dir"
     lib="$AS_LIB"
-    export run
+    # The worker, and any agent-stream run it starts, sees this run as parent.
+    AGENT_STREAM_PARENT="$dir"
+    export run AGENT_STREAM_PARENT
     # shellcheck source=../lib/run-capture.sh
     . "$AS_LIB/run-capture.sh"
     run_capture_exec "$format" -- "${AS_ARGV[@]}"
@@ -383,6 +399,15 @@ as_cmd_watch() {
     exit 127
   fi
   exec "$exe" "$@"
+}
+
+# agent-stream board [BOARD_JSON] [watcher flags]: the watcher over every
+# machine in board.json (default ~/.config/agent-stream/board.json). It reads
+# each machine's records over one shared SSH connection and writes nothing.
+as_cmd_board() {
+  local file="${XDG_CONFIG_HOME:-$HOME/.config}/agent-stream/board.json"
+  if [[ $# -gt 0 && "$1" != -* ]]; then file="$1"; shift; fi
+  as_cmd_watch --board "$file" "$@"
 }
 
 as_record_dir() {
@@ -444,6 +469,7 @@ case "${1:-help}" in
   follow) shift; as_cmd_follow "$@" ;;
   state) shift; as_cmd_state "$@" ;;
   watch) shift; as_cmd_watch "$@" ;;
+  board) shift; as_cmd_board "$@" ;;
   render) shift
     # shellcheck source=../lib/agent-output.sh
     . "$AS_LIB/agent-output.sh"; agent_output_render "$@" ;;

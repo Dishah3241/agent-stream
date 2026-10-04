@@ -84,6 +84,7 @@ func Base() *Theme {
 				"running": "running", "waiting": "waiting", "starting": "starting",
 				"success": "success", "failed": "failed", "error": "error",
 				"cancelled": "cancelled", "exited": "exited", "ended": "ended", "unknown": "unknown",
+				"no_signal": "no signal", "dialing": "dialing",
 			},
 			Report: map[string]string{
 				"success": "done", "failed": "failed", "error": "failed",
@@ -91,7 +92,7 @@ func Base() *Theme {
 			},
 			Columns: map[string]string{
 				"ship": "", "state": "STATE", "project": "PROJECT", "agent": "AGENT",
-				"plan": "PLAN", "elapsed": "ELAPSED", "now": "NOW",
+				"plan": "PLAN", "elapsed": "ELAPSED", "now": "NOW", "machine": "MACHINE",
 			},
 		},
 		Features: Features{Density: 9},

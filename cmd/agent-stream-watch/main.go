@@ -25,12 +25,20 @@ const usage = `agent-stream-watch: watch agent-stream run records
 
   agent-stream-watch [--ascii] [--once] [--theme NAME|PATH] [--loudness LEVEL]
                      [--no-eggs] [ROOT_OR_RECORD...]
+  agent-stream-watch --board BOARD_JSON [flags]
 
 ROOT is a directory of run records; the default is $AGENT_STREAM_HOME/runs
 (AGENT_STREAM_HOME defaults to ~/.agent-stream). A RECORD is one run
 directory; given alone it opens straight into the run view. When stdout is
 not a terminal, or with --once, the fleet table is printed once and the
 command exits.
+
+With --board, the fleet is every machine in BOARD_JSON, read over SSH:
+{"machines": [{"name": "forge", "ssh": "forge.local", "root": "~/.agent-stream/runs"}]}
+ssh defaults to the name and root to ~/.agent-stream/runs; "local": true
+reads a root on this machine. Each machine is one shared connection
+(ControlMaster); a machine that does not answer is one "no signal" row.
+AGENT_STREAM_SSH replaces the ssh command. Nothing is written to any machine.
 
 Fleet keys: j/k or arrows move, enter opens, a toggles all ended runs,
 r refreshes now, q quits.
@@ -63,6 +71,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	themeFlag := fs.String("theme", "", "theme name or file")
 	loudFlag := fs.String("loudness", "", "loud, balanced, or quiet")
 	noEggs := fs.Bool("no-eggs", false, "turn easter eggs off")
+	boardFile := fs.String("board", "", "board.json: watch every machine in it over SSH")
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -71,6 +80,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	roots := fs.Args()
+	var board *Board
+	if *boardFile != "" {
+		if len(roots) > 0 {
+			fmt.Fprintln(stderr, "agent-stream-watch: --board takes no roots")
+			return 2
+		}
+		machines, err := LoadBoard(*boardFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "agent-stream-watch: %v\n", err)
+			return 2
+		}
+		board = NewBoard(machines)
+		machineWidth = len(cur.Words.Columns["machine"])
+		for _, mc := range machines {
+			if len(mc.Name) > machineWidth {
+				machineWidth = len(mc.Name)
+			}
+		}
+	}
 	if len(roots) == 0 {
 		roots = []string{defaultRoot()}
 	}
@@ -90,10 +118,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent-stream-watch: %v; using the base look\n", err)
 	}
 	Use(theme)
+	if machineWidth > 0 && lipgloss.Width(cur.Words.Columns["machine"]) > machineWidth {
+		machineWidth = lipgloss.Width(cur.Words.Columns["machine"])
+	}
+	rowResolve = func(name, loudness string) (*Theme, error) {
+		return ResolveTheme(Choice{Theme: name, Loudness: loudness}, profile, useASCII, *noEggs)
+	}
+	var src Source = localSource{roots}
+	if board != nil {
+		src = board
+	}
 
 	if *once || !tty {
 		now := time.Now()
-		runs := Refresh(nil, roots, now)
+		if board != nil {
+			board.Poll()
+		}
+		runs := src.Refresh(nil, now)
 		w := &colorprofile.Writer{Forward: stdout, Profile: profile}
 		fmt.Fprint(w, FleetTable(runs, now, useASCII, tableWidth()))
 		return 0
@@ -107,8 +148,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if useASCII {
 		GlamourStyle = "notty"
 	}
-	m := newModel(roots, useASCII, time.Now)
-	if len(roots) == 1 && isRecord(roots[0]) {
+	m := newSourceModel(src, useASCII, time.Now)
+	if board == nil && len(roots) == 1 && isRecord(roots[0]) {
 		m.openRun(roots[0])
 	}
 	if _, err := tea.NewProgram(m, tea.WithColorProfile(profile)).Run(); err != nil {
@@ -152,7 +193,7 @@ func FleetTable(runs []*Run, now time.Time, ascii bool, width int) string {
 	}
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(FleetHead(width, false), " ") + "\n")
-	for _, l := range FleetLines(runs, now, mk, width, "", false, 0) {
+	for _, l := range FleetLines(Nest(runs), now, mk, width, "", false, 0) {
 		b.WriteString(strings.TrimRight(l, " ") + "\n")
 	}
 	return b.String()

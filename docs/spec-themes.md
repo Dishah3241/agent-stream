@@ -297,7 +297,16 @@ Each milestone is a pull request that passes CI on Linux and macOS.
   `counts.metrics`; the watcher's run view gains the telemetry panel. The
   heartbeat is the age of `state.json`, which the tracker rewrites on every
   label line.
-- Milestone 5, the combined board: not started.
+- Milestone 5, the combined board: done. `agent-stream board` reads
+  `board.json`, polls each machine in the background through one
+  `ControlMaster` connection, groups rows under a MACHINE column, draws each
+  row's callsign and color from the theme its run recorded, nests children
+  under parents (`AGENT_STREAM_PARENT` and `--parent`), shows "no signal"
+  with the last answer and the reason, and tails a remote run's
+  `display.txt` in the background. Additions to the plan: `"local": true`
+  reads a machine's root without ssh, `AGENT_STREAM_SSH` replaces the ssh
+  command (the tests use a stand-in), and themes name the MACHINE column
+  and the `no_signal` and `dialing` states.
 
 Changes from the plan, as built: the record carries the requested theme in
 `state.json` (`theme.name`, `theme.loudness`) rather than in

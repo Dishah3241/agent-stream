@@ -79,4 +79,39 @@ mkdir -p "$TMP/empty"
 AGENT_STREAM_WATCH="$WATCH" "$BIN" watch "$TMP/empty" >"$TMP/none" || fail "an empty root is not an error"
 grep -qx 'no runs' "$TMP/none" || fail "an empty root says no runs"
 
+# ------------------------------------------------------------------ board ---
+# agent-stream board over a stand-in ssh that runs the remote command here:
+# a real run nested under its parent, a local machine, and one that refuses.
+
+cat >"$TMP/ssh" <<'S'
+#!/bin/sh
+while [ $# -gt 0 ]; do case $1 in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
+host=$1; shift
+[ "$host" = dead ] && { echo "ssh: connect to host dead: Connection refused" >&2; exit 255; }
+exec sh -c "$*"
+S
+chmod +x "$TMP/ssh"
+printf 'echo working\n' >"$TMP/w.sh"
+cat >"$TMP/outer.sh" <<W
+#!/usr/bin/env bash
+AGENT_STREAM_HOME="$TMP/forge" "$BIN" run --agent codex --task inner --id inner1 -- bash "$TMP/w.sh" >/dev/null 2>&1
+W
+AGENT_STREAM_HOME="$TMP/forge" "$BIN" run --agent codex --task outer --project fleet --id outer1 -- bash "$TMP/outer.sh" >/dev/null 2>&1 \
+  || fail "the nested run"
+cat >"$TMP/board.json" <<J
+{"machines": [{"name": "forge", "ssh": "forge.example", "root": "$TMP/forge/runs"},
+              {"name": "here", "local": true, "root": "$AGENT_STREAM_HOME/runs"},
+              {"name": "air", "ssh": "dead"}]}
+J
+AGENT_STREAM_SSH="$TMP/ssh" AGENT_STREAM_WATCH="$WATCH" COLUMNS=120 \
+  "$BIN" board "$TMP/board.json" --once >"$TMP/board" 2>"$TMP/err" || fail "board exit: $(cat "$TMP/err")"
+grep -q '^MACHINE' "$TMP/board" || fail "the board has a MACHINE column: $(cat "$TMP/board")"
+grep -q '^forge .* fleet' "$TMP/board" || fail "the forge run is under forge: $(cat "$TMP/board")"
+grep -Eq '(└|`-) ' "$TMP/board" || fail "the inner run is nested under the outer one: $(cat "$TMP/board")"
+grep -q '^here ' "$TMP/board" || fail "the local machine is listed: $(cat "$TMP/board")"
+grep -q '^air .*no signal.*Connection refused' "$TMP/board" || fail "an unreachable machine is no signal: $(cat "$TMP/board")"
+rc=0
+AGENT_STREAM_WATCH="$WATCH" "$BIN" board "$TMP/missing.json" --once >/dev/null 2>"$TMP/err" || rc=$?
+[[ "$rc" == 2 ]] && grep -q 'missing.json' "$TMP/err" || fail "a missing board.json is a usage error naming it"
+
 echo "agent-watch test: all assertions passed"

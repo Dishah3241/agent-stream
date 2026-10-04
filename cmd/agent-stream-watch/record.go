@@ -28,11 +28,16 @@ type State struct {
 	Session        string  `json:"session"`
 	Project        Project `json:"project"`
 	Task           string  `json:"task"`
-	StartedAt      string  `json:"started_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	EndedAt        string  `json:"ended_at"`
-	ElapsedS       int64   `json:"elapsed_s"`
-	Activity       struct {
+	Parent         string  `json:"parent"` // the record of the run that started this one
+	Theme          struct {
+		Name     string `json:"name"`
+		Loudness string `json:"loudness"`
+	} `json:"theme"`
+	StartedAt string `json:"started_at"`
+	UpdatedAt string `json:"updated_at"`
+	EndedAt   string `json:"ended_at"`
+	ElapsedS  int64  `json:"elapsed_s"`
+	Activity  struct {
 		Kind string `json:"kind"`
 		Text string `json:"text"`
 	} `json:"activity"`
@@ -117,6 +122,9 @@ type Run struct {
 	StateErr error
 	ModTime  time.Time // state.json mtime, or the directory's when absent
 	Loaded   time.Time
+	Machine  string  // the board machine, "" for a local record
+	Signal   *Signal // set on a board machine's dialing or no-signal row
+	Depth    int     // nesting under a parent run, set by Nest
 }
 
 // Elapsed is the run's age: the recorded elapsed seconds once ended, the
@@ -138,7 +146,7 @@ func (r *Run) Elapsed(now time.Time) time.Duration {
 	return time.Duration(r.State.ElapsedS) * time.Second
 }
 
-// Open reports whether the run has not ended.
+// Open reports whether the run has not ended. A signal row is neither.
 func (r *Run) Open() bool {
 	return r.State != nil && r.State.Status != "ended"
 }

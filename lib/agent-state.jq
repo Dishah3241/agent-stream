@@ -20,7 +20,7 @@ def init_state($seed):
     id: null, status: "starting",
     agent: null, model: null, model_requested: null, session: null,
     project: {name: null, dir: null, branch: null},
-    task: null,
+    task: null, parent: null,
     started_at: now_iso, updated_at: now_iso, ended_at: null, elapsed_s: 0,
     activity: {kind: "idle", text: null, since: now_iso},
     step: null,

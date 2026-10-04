@@ -129,6 +129,8 @@
       "liftoff": "dome open"
     },
     "states": {
+      "no_signal": "clouded out",
+      "dialing": "slewing",
       "running": "observing",
       "waiting": "tracking",
       "starting": "cooling",
@@ -149,6 +151,7 @@
       "ended": "NIGHT OVER"
     },
     "columns": {
+      "machine": "SITE",
       "ship": "SCOPE",
       "state": "SKY",
       "project": "FIELD",

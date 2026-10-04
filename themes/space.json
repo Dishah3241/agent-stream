@@ -135,6 +135,8 @@
     },
     "report_title": "MISSION REPORT",
     "states": {
+      "no_signal": "no signal",
+      "dialing": "hailing",
       "running": "in flight",
       "waiting": "holding",
       "starting": "on pad",
@@ -155,6 +157,7 @@
       "ended": "LANDED"
     },
     "columns": {
+      "machine": "STATION",
       "ship": "SHIP",
       "state": "STATUS",
       "project": "PROJECT",

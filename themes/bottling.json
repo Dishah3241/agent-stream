@@ -129,6 +129,8 @@
       "liftoff": "line started"
     },
     "states": {
+      "no_signal": "line down",
+      "dialing": "warming up",
       "running": "filling",
       "waiting": "paused",
       "starting": "rinsing",
@@ -149,6 +151,7 @@
       "ended": "OFF SHIFT"
     },
     "columns": {
+      "machine": "PLANT",
       "ship": "LINE",
       "state": "STATUS",
       "project": "ORDER",
