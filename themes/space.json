@@ -1,0 +1,108 @@
+{
+  "schema": "agent-stream/theme/1",
+  "name": "space",
+  "description": "Deep Field: mission control for coding agents. Starfields, callsigns, a rocket that climbs the flight plan, and a few science-fiction easter eggs.",
+
+  "colors": {
+    "accent":  { "hex": "#5CE1E6", "ansi256": 80,  "ansi": 6 },
+    "dim":     { "faint": true },
+    "ok":      { "hex": "#7CF29A", "ansi256": 120, "ansi": 2 },
+    "warn":    { "hex": "#FFB347", "ansi256": 215, "ansi": 3 },
+    "err":     { "hex": "#FF5C7A", "ansi256": 204, "ansi": 1 },
+    "title":   { "hex": "#E8ECF8", "ansi256": 255, "ansi": 15, "bold": true },
+    "think":   { "hex": "#9D7BFF", "ansi256": 141, "ansi": 5 },
+    "sky":     { "hex": "#5B6382", "ansi256": 60,  "ansi": 8 },
+    "egg":     { "hex": "#FF6AD5", "ansi256": 206, "ansi": 13 },
+    "ships": [
+      { "hex": "#5FD7FF", "ansi256": 81,  "ansi": 14 },
+      { "hex": "#FF87FF", "ansi256": 213, "ansi": 13 },
+      { "hex": "#AF87FF", "ansi256": 141, "ansi": 5 },
+      { "hex": "#FFD75F", "ansi256": 221, "ansi": 11 },
+      { "hex": "#87AFFF", "ansi256": 111, "ansi": 12 },
+      { "hex": "#FFAF87", "ansi256": 216, "ansi": 9 }
+    ]
+  },
+
+  "glyphs": {
+    "unicode": {
+      "active": "➤", "lit": "✦", "pending": "·", "dropped": "×",
+      "launch": "▲", "trail": "━", "ahead": "┈",
+      "card_open": "╭", "card_close": "╰",
+      "sky": "·˚⋆✦✧",
+      "orbit": "◜◝◞◟"
+    },
+    "ascii": {
+      "active": ">", "lit": "*", "pending": ".", "dropped": "x",
+      "launch": "^", "trail": "=", "ahead": ".",
+      "card_open": "+", "card_close": "+",
+      "sky": "",
+      "orbit": "-\\|/"
+    }
+  },
+
+  "words": {
+    "tool": "burn",
+    "done": "nominal",
+    "error": "anomaly",
+    "warn": "caution",
+    "note": "",
+    "think": "plotting course",
+    "wait": "holding",
+    "step": "heading",
+    "plan": "flight plan",
+    "run": "ignition",
+    "result_ok": "MECO",
+    "altitude": "altitude",
+    "quiet": "radio silence",
+    "fleet_title": "MISSION CONTROL",
+    "header": { "task": "mission", "cwd": "pad", "agent": "vehicle", "output": "recorder", "liftoff": "liftoff" },
+    "report_title": "MISSION REPORT",
+    "states": {
+      "running": "in flight", "waiting": "holding", "starting": "on pad",
+      "success": "in orbit", "failed": "anomaly", "error": "anomaly",
+      "cancelled": "scrubbed", "exited": "splashdown", "ended": "landed", "unknown": "no signal"
+    },
+    "report": {
+      "success": "ORBIT ACHIEVED", "failed": "ANOMALY", "error": "ANOMALY",
+      "cancelled": "SCRUBBED", "exited": "SPLASHDOWN", "ended": "LANDED"
+    },
+    "columns": { "ship": "SHIP", "state": "STATUS", "project": "PROJECT", "agent": "VEHICLE", "plan": "ALTITUDE", "elapsed": "T+", "now": "TELEMETRY" }
+  },
+
+  "features": {
+    "sky": true,
+    "sky_density": 9,
+    "callsigns": true,
+    "trajectory": true,
+    "launch_header": true,
+    "mission_report": true,
+    "twinkle": true,
+    "holding_spinner": true
+  },
+
+  "callsigns": {
+    "names": ["VEGA", "SIRIUS", "ALTAIR", "DENEB", "LYRA", "POLARIS", "RIGEL", "ANTARES",
+              "CAPELLA", "SPICA", "MIRA", "CASTOR", "POLLUX", "CANOPUS", "ACRUX", "HADAR"]
+  },
+
+  "eggs": {
+    "error_streak": "three anomalies in a row · don't panic",
+    "answer_42": "42 burns: the answer, apparently",
+    "three_laws": "the Three Laws held",
+    "seldon_crisis": "a Seldon crisis: the plan foresaw this",
+    "seldon_approves": "the plan held; Seldon would approve",
+    "dark_forest": "dark forest",
+    "chaotic_era": "a chaotic era: three suns",
+    "bugs": "anomalies everywhere, still in orbit: bugs persist",
+    "wallfacer": "Wallfacer",
+    "fist_my_bump": "fist my bump",
+    "amaze": "♪♫♪ amaze amaze amaze",
+    "sol": "Sol {sol}: still sciencing",
+    "science_it": "had to science the heck out of it",
+    "spice": "the spice must flow",
+    "litany": "recite the litany",
+    "dead_channel": "sky the color of a dead channel",
+    "callsign_1701": "ENTERPRISE",
+    "hyperspace": "HYPERSPACE · board returns in a moment"
+  }
+}
