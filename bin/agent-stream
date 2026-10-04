@@ -151,12 +151,23 @@ as_cmd_acp_bridge() {
   while true; do
     rc=0
     if (( finishing )); then
+      # Bash 3.2 returns 1 for a read timeout, the same as EOF (the >128
+      # status arrived in Bash 4), so a failed read is told apart by
+      # asking whether the agent is still alive: alive means keep waiting
+      # until the grace deadline, dead means the stream is finished.
       IFS= read -r -t 1 line <&4 || rc=$?
-      if (( rc > 128 )); then
-        if (( SECONDS >= deadline )); then
-          kill "$agent_pid" 2>/dev/null || true
+      if (( rc != 0 )); then
+        [[ -z "$line" ]] || printf '%s\n' "$line"
+        if ! kill -0 "$agent_pid" 2>/dev/null; then
           break
         fi
+        if (( SECONDS >= deadline )); then
+          kill "$agent_pid" 2>/dev/null || true
+          sleep 1
+          kill -9 "$agent_pid" 2>/dev/null || true
+          break
+        fi
+        if (( rc <= 128 )); then sleep 1; fi
         continue
       fi
     else

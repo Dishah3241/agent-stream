@@ -738,11 +738,15 @@ agent_present_stream() {
   # byte so newline-free progress is visible before EOF. Label lines stay
   # held until newline or until they are no longer a recognized prefix.
   # In pinned mode the read times out once a second so the footer's clock
-  # moves while the agent is silent; a timeout is not EOF.
+  # moves while the agent is silent; a timeout returns a status above 128
+  # and is not EOF. Bash 3.2 returns 1 for both, so there the footer is
+  # redrawn only when a line arrives and no timeout is used.
+  local tick=0
+  if [[ "${_AP_PIN:-0}" == 1 && "${BASH_VERSINFO[0]:-3}" -ge 4 ]]; then tick=1; fi
   while true; do
     c=""
     rc=0
-    if [[ "${_AP_PIN:-0}" == 1 ]]; then
+    if (( tick )); then
       IFS= read -r -n 1 -t 1 c || rc=$?
     else
       IFS= read -r -n 1 c || rc=$?
