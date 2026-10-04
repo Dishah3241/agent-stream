@@ -136,6 +136,7 @@ func TestBoardKeepsUpAndTails(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := NewBoard(machines)
+	t.Cleanup(b.Wait) // runs before the temp dirs are removed
 	b.Every = 0
 	rows := b.Refresh(nil, time.Now())
 	for _, r := range rows {
@@ -280,6 +281,7 @@ func TestBoardModelPollsAndOpensARemoteRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := NewBoard(machines)
+	t.Cleanup(b.Wait) // runs before the temp dirs are removed
 	b.Every = 10 * time.Millisecond
 	machineWidth = 7
 	defer func() { machineWidth = 0 }()

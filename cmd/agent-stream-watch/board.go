@@ -159,6 +159,7 @@ type Board struct {
 	ctl      string        // the ControlPath directory, "" for none
 
 	mu    sync.Mutex
+	work  sync.WaitGroup // background polls and tails
 	state []*machineState
 	tails map[string]*tailJob
 }
@@ -354,6 +355,9 @@ func parsePoll(out []byte, now time.Time) (*pollResult, error) {
 	return res, nil
 }
 
+// Wait waits for the background polls and tails already started.
+func (b *Board) Wait() { b.work.Wait() }
+
 // Poll polls every machine once and waits: the printed table uses it.
 func (b *Board) Poll() {
 	var wg sync.WaitGroup
@@ -378,7 +382,8 @@ func (b *Board) Refresh(prev []*Run, now time.Time) []*Run {
 		st := b.state[i]
 		if !st.busy && now.Sub(st.polled) >= b.Every {
 			st.busy = true
-			go b.poll(i)
+			b.work.Add(1)
+			go func(i int) { defer b.work.Done(); b.poll(i) }(i)
 		}
 		if st.err != "" || st.answered.IsZero() {
 			out = append(out, &Run{Dir: m.Name + ":", Machine: m.Name,
@@ -459,7 +464,9 @@ func (b *Board) startTail(idx int, key, path string, from int64, reset bool) {
 	b.mu.Lock()
 	b.tails[key] = j
 	b.mu.Unlock()
+	b.work.Add(1)
 	go func() {
+		defer b.work.Done()
 		out, err := b.command(b.Machines[idx], tailScript, path, strconv.FormatInt(from, 10))
 		var size int64
 		var data []byte
