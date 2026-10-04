@@ -45,13 +45,14 @@ type marks struct {
 
 	active, unknown, pending, lit           string // plan rows and the selected row
 	cardOpen, cardClose                     string // header and report cards
+	gaugeOpen, gaugeClose                   string // the ends of a fill gauge
 	launch, trail, ahead, sky, orbit, field string // trajectory, background, spinner
 }
 
 var uni = marks{"▸", "·", "✓", "✗", "!", "·", "~", "–", "·", "┌", "└", "─", "│", "──", "…",
-	"▸", "?", "·", "✓", "", "", "", "", "", "", "", ""}
+	"▸", "?", "·", "✓", "", "", "", "", "", "", "", "", "", ""}
 var asc = marks{">", "-", "+", "x", "!", ".", "~", "-", "-", "+", "+", "-", "|", "--", "...",
-	">", "?", ".", "+", "", "", "", "", "", "", "", ""}
+	">", "?", ".", "+", "", "", "", "", "", "", "", "", "", ""}
 
 // word puts a theme word in front of a text, or returns the text alone.
 func word(w, text string) string {

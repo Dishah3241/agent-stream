@@ -282,6 +282,24 @@ Each milestone is a pull request that passes CI on Linux and macOS.
 5. **Combined board.** `agent-stream board` over SSH with the machine column,
    per-run theming, nesting, and "no signal".
 
+## 8.1 Status
+
+- Milestone 1, Charm v2: done.
+- Milestone 2, theme engine and project config: done for the pane and the
+  watcher, with the space theme end to end.
+- Milestone 3, the four product themes: done (observatory, blueprint,
+  radio, bottling). The VHS-recorded gallery is not done: VHS is not
+  installed in the build environment, so the preview script's theme gallery
+  stands in for it.
+- Milestones 4 (Forge `[metric]` and `[stage]`) and 5 (the combined board):
+  not started.
+
+Changes from the plan, as built: the record carries the requested theme in
+`state.json` (`theme.name`, `theme.loudness`) rather than in
+`header.json`, because `header.json` belongs to the caller and is never
+rewritten. Theme glyphs gained `field`, `gauge_open`, and `gauge_close`,
+and header words gained `countdown`.
+
 ## 9. Non-goals
 
 - No change to what is recorded because of a theme.

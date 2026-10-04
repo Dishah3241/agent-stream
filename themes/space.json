@@ -130,7 +130,8 @@
       "cwd": "pad",
       "agent": "vehicle",
       "output": "recorder",
-      "liftoff": "liftoff"
+      "liftoff": "liftoff",
+      "countdown": "T-3 T-2 T-1 T-0"
     },
     "report_title": "MISSION REPORT",
     "states": {

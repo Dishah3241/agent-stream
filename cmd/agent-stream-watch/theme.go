@@ -471,6 +471,7 @@ func applyGlyphs(m *marks, g map[string]string) {
 		"active": &m.active, "step": &m.step, "done": &m.done, "error": &m.err, "warn": &m.warn,
 		"unknown": &m.unknown, "pending": &m.pending, "wait": &m.wait, "dropped": &m.drop,
 		"sep": &m.sep, "ell": &m.ell, "card_open": &m.cardOpen, "card_close": &m.cardClose,
+		"gauge_open": &m.gaugeOpen, "gauge_close": &m.gaugeClose,
 		"rule": &m.h, "side": &m.v, "divider": &m.h2, "lit": &m.lit, "launch": &m.launch,
 		"trail": &m.trail, "ahead": &m.ahead, "sky": &m.sky, "orbit": &m.orbit, "field": &m.field,
 	}
@@ -729,11 +730,11 @@ func (t *Theme) Gauge(m marks, statuses []string, seg, max int) string {
 		inner := w - 2
 		f := done * inner / n
 		bar := strings.Repeat(m.lit, f) + strings.Repeat(m.pending, inner-f)
-		cap := m.cardOpen
+		cap := m.gaugeOpen
 		if cap == "" {
 			cap = "["
 		}
-		end := m.cardClose
+		end := m.gaugeClose
 		if end == "" {
 			end = "]"
 		}

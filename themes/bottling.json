@@ -80,11 +80,13 @@
       "launch": "▶",
       "trail": "═",
       "ahead": "─",
-      "card_open": "▕",
-      "card_close": "▏",
+      "card_open": "╭",
+      "card_close": "╰",
       "sky": "▯▮",
       "field": "═",
-      "orbit": "◐◓◑◒"
+      "orbit": "◐◓◑◒",
+      "gauge_open": "▕",
+      "gauge_close": "▏"
     },
     "ascii": {
       "active": ">",
@@ -98,7 +100,9 @@
       "card_close": "]",
       "sky": "",
       "field": "",
-      "orbit": "-\\|/"
+      "orbit": "-\\|/",
+      "gauge_open": "[",
+      "gauge_close": "]"
     }
   },
   "words": {

@@ -8,6 +8,11 @@
 #   AGENT_RUN_COLOR=never tests/fixtures/agent-present/preview.sh
 #   TERM=dumb tests/fixtures/agent-present/preview.sh        # ASCII marks
 #   AGENT_RUN_STATUS=pinned tests/fixtures/agent-present/preview.sh  # footer
+#   AGENT_STREAM_THEME=radio tests/fixtures/agent-present/preview.sh # one theme
+#
+# Sections 1 to 8 use the base look; section 9 shows every theme in themes/
+# (or only AGENT_STREAM_THEME when set): launch header, a stream with a
+# plan and easter eggs, and the ending.
 #
 # Sections 1 to 6 are one run from start to end; 7 and 8 are the record and
 # goal views the private dispatcher renders with the same palette.
@@ -18,6 +23,8 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 . "$ROOT/lib/agent-present.sh"
 
 export AGENT_RUN_COLOR="${AGENT_RUN_COLOR:-always}"
+GALLERY="${AGENT_STREAM_THEME:-}"
+export AGENT_STREAM_THEME=plain
 RUNS="${AGENT_STREAM_HOME:-$HOME/.agent-stream}/runs"
 REC="$RUNS/20261004-050000-ab12cd34"
 
@@ -214,9 +221,39 @@ printf '%s\n' '{"id":"goal-20260920-162500-bcd23456","title":"Split the renderer
     "cancelled":0,"incomplete":0,"invalid":0,"launch_failed":0},
   "paths":null,"problems":[]}' | agent_present_goal
 
+rule
+printf '%s\n' "9 · themes: each design file in themes/, same run"
+for theme in ${GALLERY:-space observatory blueprint radio bottling}; do
+  printf '\n%s\n\n' ">>> theme: $theme"
+  (
+    export AGENT_STREAM_THEME="$theme"
+    printf '%s\n' '{"id":"20261004-050000-ab12cd34","agent":"claude","project":"forge","branch":"main",
+      "task":"Integrate the orbital model across the full parameter sweep and report convergence.",
+      "cwd":"'"$HOME"'/Code/forge","dir":"'"$REC"'"}' | agent_present_header
+    printf '%s\n' \
+      '[run] claude claude-opus-5-5 session 3f9c2a71' \
+      '[todo] 1/3 done Load the sweep' \
+      '[todo] 2/3 active Integrate' \
+      '[todo] 3/3 pending Report' \
+      '[tool] Bash make integrate' \
+      '[error] Bash: diverged' \
+      '[tool] Bash make integrate' \
+      '[error] Bash: diverged' \
+      '[tool] Bash make integrate' \
+      '[error] Bash: diverged' \
+      '[wait] permission: Write results.csv' \
+      '[step] lowering the step size' \
+      'Converged after lowering the step size.' \
+      '[run] result success (4210ms, 3 turns, 1 denied)' | agent_present_stream
+    printf '%s\n' '{"id":"20261004-050000-ab12cd34","agent":"claude","task":"Integrate the orbital model",
+      "outcome":{"kind":"success","exit":0,"summary":"converged at step 1e-4"},"elapsed_s":9000,
+      "todo_counts":{"done":3,"total":3},"counts":{"tools":42,"errors":3},"record":{"dir":"'"$REC"'"}}' | agent_present_end
+  )
+done
+
 if [[ "${AGENT_RUN_STATUS:-}" == pinned && -t 1 ]]; then
   rule
-  printf '%s\n' "9 · pinned footer: the stream scrolls above a two-line status for ten seconds"
+  printf '%s\n' "10 · pinned footer: the stream scrolls above a two-line status for ten seconds"
   for i in 1 2 3 4 5 6 7 8 9 10; do printf '[tool] Bash step %s\n[done] Bash\n' "$i"; sleep 1; done | agent_present_stream
 fi
 rule

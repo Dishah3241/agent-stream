@@ -26,6 +26,8 @@ trap 'rm -rf "$TMP"' EXIT
 # Default assertions run in a UTF-8, non-dumb terminal. Color stays off
 # unless a test opts in. An ambient NO_COLOR must not leak into opt-in tests.
 export AGENT_RUN_COLOR=never
+# These assertions pin the base look; tests/agent-theme.test.sh covers themes.
+export AGENT_STREAM_THEME=plain
 export TERM=xterm
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8

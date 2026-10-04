@@ -397,13 +397,23 @@ as_cmd_follow() {
   dir="$(as_record_dir "${1:-}")"
   # shellcheck source=../lib/agent-present.sh
   . "$AS_LIB/agent-present.sh"
-  run="$dir"
-  export run
+  # Style the replay the way the run's own project chose.
+  local pdir
+  pdir="$(jq -r '.project.dir // ""' "$dir/state.json" 2>/dev/null)" || pdir=""
+  if [[ -n "$pdir" && -d "$pdir" && -z "${AGENT_STREAM_PROJECT_DIR:-}" ]]; then
+    AGENT_STREAM_PROJECT_DIR="$pdir"
+    export AGENT_STREAM_PROJECT_DIR
+  fi
   if [[ -f "$dir/header.json" ]]; then agent_present_header <"$dir/header.json" || true; fi
   if [[ -s "$dir/state.json" ]] && jq -e '.status == "ended"' "$dir/state.json" >/dev/null 2>&1; then
-    agent_present_stream <"$dir/display.txt"
+    # A finished run replays without status cards (they would show the
+    # final state mid-replay) and without the [end] line, because the
+    # ending card below says the same thing once.
+    grep -v '^\[end\] ' "$dir/display.txt" | agent_present_stream
     agent_present_end <"$dir/state.json" || true
   else
+    run="$dir"
+    export run
     [[ -f "$dir/display.txt" ]] || as_die "no display.txt in $dir yet"
     tail -n +1 -f "$dir/display.txt" | agent_present_stream
   fi

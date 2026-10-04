@@ -203,6 +203,33 @@ The run view pins the project, task, plan progress, tool and error counts, and t
 
 The watcher honors `NO_COLOR`, `AGENT_RUN_COLOR`, `TERM=dumb`, and the locale like the pane does; `--ascii` forces ASCII marks. `AGENT_STREAM_WATCH` points `agent-stream watch` at a binary elsewhere.
 
+## Themes
+
+Each project picks how its panes and watcher look with a committed `.agent-stream/config.json`:
+
+```json
+{ "schema": "agent-stream/project/1", "theme": "observatory", "loudness": "loud" }
+```
+
+Five designs ship in `themes/`, each with its own words, colors, glyphs, generated background, progress gauge, callsigns, and easter eggs: `space` (agent-stream, and the default), `observatory` (Forge), `blueprint` (Miini), `radio` (Air), and `bottling` (PC). Loudness is `loud`, `balanced` (no motion, no eggs), or `quiet` (the base look). A project can ship its own `.agent-stream/theme.json`. The space theme in the pane:
+
+```
+╭─ ANTARES-4 claude · forge · main ─────────────────────────────────────────
+  mission Integrate the orbital model across the full parameter sweep and r…
+  T-0    ▲ liftoff
+── · flight plan
+│ ✦ 1/3 Load the sweep
+│ ➤ 2/3 Integrate
+│ ✦━━➤┈┈·  altitude 1/3
+┌─ · burn Bash make integrate
+└─ ✗ anomaly Bash: diverged
+│ three anomalies in a row · don't panic
+╭─ MISSION REPORT · ANTARES-4 claude ───────────────────────────────────────
+│ ✓ ORBIT ACHIEVED  success · exit 0 · 2h30m
+```
+
+Themes are presentation only: `display.txt` and `state.json` are identical under every theme, every themed state keeps its mark and plain word, and a pipe, `NO_COLOR`, `TERM=dumb`, or a non-UTF-8 locale always gets the base look. `themes/README.md` documents the format, resolution, and every egg; `docs/spec-themes.md` is the agreed spec.
+
 ## Environment
 
 | Variable | Effect |
@@ -215,6 +242,9 @@ The watcher honors `NO_COLOR`, `AGENT_RUN_COLOR`, `TERM=dumb`, and the locale li
 | `run` | When set to a record directory, the pane prints a status card from its `state.json` every 40 lines |
 | `AGENT_RUN_STATUS=pinned` | Terminal-only, opt-in: a two-line footer pinned below the scrolling stream, redrawn from `state.json` at most once a second. Lines scrolled inside the reduced region may not reach scrollback in some terminals |
 | `AGENT_STREAM_HOME` | Record root for `bin/agent-stream` (default `~/.agent-stream`) |
+| `AGENT_STREAM_THEME`, `AGENT_STREAM_LOUDNESS` | Theme name or file, and `loud`, `balanced`, or `quiet`; override the project's `.agent-stream/config.json` |
+| `AGENT_STREAM_THEMES` | Extra folders to find theme files in, colon-separated |
+| `AGENT_STREAM_EGGS=0` | Turns easter eggs off |
 | `AGENT_STREAM_ACP_PERMISSION`, `AGENT_STREAM_ACP_VERSION`, `AGENT_STREAM_ACP_GRACE` | ACP bridge policy: `allow` (default) or `deny`; protocol version offered (default 2); seconds to wait for the agent to exit (default 10) |
 | `AGENT_STREAM_WATCH` | The watcher binary `agent-stream watch` runs (default: `bin/agent-stream-watch`, then `PATH`) |
 
