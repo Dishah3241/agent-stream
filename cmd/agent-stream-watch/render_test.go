@@ -48,6 +48,10 @@ func TestRenderProtocolLines(t *testing.T) {
 		{[]string{"[end] success exit 0 elapsed 3s record /r"}, "── ✓ success exit 0 elapsed 3s record /r"},
 		{[]string{"[end] failed exit 1 elapsed 3s record /r"}, "── ✗ failed exit 1 elapsed 3s record /r"},
 		{[]string{"plain text"}, "plain text"},
+		{[]string{"[stage] 2/7 mesh"}, "── ▸ stage 2/7 mesh"},
+		{[]string{"[metric] residual=0.0031"}, "│ metric residual 0.0031"},
+		{[]string{"[metric] rate=1.5e3 items/s"}, "│ metric rate 1.5e3 items/s"},
+		{[]string{"[metric] bogus"}, "│ [metric] bogus"},
 		{[]string{"text with \x1b[2Jcontrol\x07 bytes\r"}, "text with [2Jcontrol bytes"},
 	}
 	for _, c := range cases {

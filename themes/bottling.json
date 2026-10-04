@@ -156,7 +156,11 @@
       "plan": "FILL",
       "elapsed": "SHIFT",
       "now": "STATION"
-    }
+    },
+    "metric": "gauge",
+    "stage": "phase",
+    "eta": "done in",
+    "heartbeat": "last fill"
   },
   "background": {
     "kind": "belt",

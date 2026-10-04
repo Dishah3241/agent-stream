@@ -37,6 +37,7 @@ const (
 type Words struct {
 	Tool, Done, Error, Warn, Note, Think, Wait, Step, Plan, Run, ResultOK string
 	Altitude, Quiet, FleetTitle, ReportTitle                              string
+	Metric, Stage, ETA, Heartbeat                                         string
 	Header, States, Report, Columns                                       map[string]string
 }
 
@@ -77,6 +78,7 @@ func Base() *Theme {
 		Words: Words{
 			Think: "think", Wait: "waiting", Step: "now", Plan: "plan", Run: "run",
 			Altitude: "plan", Quiet: "quiet", FleetTitle: "agent-stream",
+			Metric: "metric", Stage: "stage", ETA: "ETA", Heartbeat: "last line",
 			Header: map[string]string{"task": "task", "cwd": "cwd", "agent": "run", "output": "output", "liftoff": ""},
 			States: map[string]string{
 				"running": "running", "waiting": "waiting", "starting": "starting",
@@ -145,8 +147,9 @@ func (t *Theme) Animated() bool { return t.Loudness == Loud }
 // AGENT_STREAM_THEME), else the project's config, else space.
 type Choice struct {
 	Theme, Loudness string
-	Eggs            *bool  // project override of the theme's eggs_default
-	ProjectDir      string // git top level holding .agent-stream/, or ""
+	Eggs            *bool    // project override of the theme's eggs_default
+	Metrics         []string // metric names the project wants first
+	ProjectDir      string   // git top level holding .agent-stream/, or ""
 }
 
 // ProjectChoice reads .agent-stream/config.json at the git top level of dir.
@@ -163,6 +166,7 @@ func ProjectChoice(dir string) (Choice, error) {
 	var c struct {
 		Schema, Theme, Loudness string
 		Eggs                    *bool
+		Metrics                 []string
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Choice{ProjectDir: top}, fmt.Errorf(".agent-stream/config.json: %w", err)
@@ -170,7 +174,13 @@ func ProjectChoice(dir string) (Choice, error) {
 	if c.Schema != "" && c.Schema != projectSchema {
 		return Choice{ProjectDir: top}, fmt.Errorf(".agent-stream/config.json: schema %q, want %q", c.Schema, projectSchema)
 	}
-	return Choice{Theme: clean(c.Theme), Loudness: clean(c.Loudness), Eggs: c.Eggs, ProjectDir: top}, nil
+	var metrics []string
+	for _, m := range c.Metrics {
+		if m = clean(m); m != "" && len(metrics) < 8 {
+			metrics = append(metrics, m)
+		}
+	}
+	return Choice{Theme: clean(c.Theme), Loudness: clean(c.Loudness), Eggs: c.Eggs, Metrics: metrics, ProjectDir: top}, nil
 }
 
 func gitTop(dir string) string {
@@ -489,6 +499,7 @@ func applyWords(w *Words, raw map[string]json.RawMessage) error {
 		"think": &w.Think, "wait": &w.Wait, "step": &w.Step, "plan": &w.Plan, "run": &w.Run,
 		"result_ok": &w.ResultOK, "altitude": &w.Altitude, "quiet": &w.Quiet,
 		"fleet_title": &w.FleetTitle, "report_title": &w.ReportTitle,
+		"metric": &w.Metric, "stage": &w.Stage, "eta": &w.ETA, "heartbeat": &w.Heartbeat,
 	}
 	for k, v := range raw {
 		if dst, ok := maps[k]; ok {

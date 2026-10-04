@@ -135,6 +135,7 @@ func chooseTheme(flagTheme, flagLoud string, profile colorprofile.Profile, ascii
 	if flagLoud != "" {
 		c.Loudness = flagLoud
 	}
+	metricOrder = c.Metrics
 	t, err := ResolveTheme(c, profile, ascii, noEggs)
 	if err == nil {
 		err = perr

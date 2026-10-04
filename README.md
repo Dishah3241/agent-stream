@@ -91,6 +91,8 @@ Plain text, one line each, identical on the terminal and in `display.txt`. Old p
 [todo] I/N STATUS text                        STATUS in pending | active | done | dropped
 [step] text                                   the agent's own one-line "what I am doing"
 [end] OUTCOME exit N elapsed Ns record PATH   appended by the capture layer after the worker exits
+[metric] NAME=VALUE [UNIT]                    a number from the agent's work, printed by the agent itself
+[stage] I/N NAME                              the stage of a long multi-stage job, printed by the agent itself
 ```
 
 Plan lines are self-contained: `I/N` positions the item and `N` is the plan length, so a `tail -f` reader never needs context. The whole list is shown when a plan appears or changes length; afterwards only changed items.
@@ -227,6 +229,8 @@ Five designs ship in `themes/`, each with its own words, colors, glyphs, generat
 ╭─ MISSION REPORT · ANTARES-4 claude ───────────────────────────────────────
 │ ✓ ORBIT ACHIEVED  success · exit 0 · 2h30m
 ```
+
+Long jobs can report telemetry by printing `[metric] residual=0.0031` and `[stage] 3/7 integrate` on lines of their own. The pane styles them, `state.json` keeps each metric's last 60 samples, the stage timeline, `progress`, and a forecast `eta_s`, and the watcher shows a telemetry panel with the stage, the forecast, a heartbeat, sparklines, and the stage timeline. A project lists the metrics it cares about first with `"metrics": ["residual", "rate"]` in `.agent-stream/config.json`.
 
 Themes are presentation only: `display.txt` and `state.json` are identical under every theme, every themed state keeps its mark and plain word, and a pipe, `NO_COLOR`, `TERM=dumb`, or a non-UTF-8 locale always gets the base look. `themes/README.md` documents the format, resolution, and every egg; `docs/spec-themes.md` is the agreed spec.
 

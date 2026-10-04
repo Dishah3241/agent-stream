@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -73,6 +74,33 @@ type State struct {
 		Dir     string `json:"dir"`
 		Display string `json:"display"`
 	} `json:"record"`
+	Metrics  map[string]Metric `json:"metrics"`
+	Stages   []Stage           `json:"stages"`
+	Stage    *Stage            `json:"stage"`
+	Progress *struct {
+		Done   int    `json:"done"`
+		Total  int    `json:"total"`
+		Source string `json:"source"`
+	} `json:"progress"`
+	EtaS *int64 `json:"eta_s"`
+}
+
+// Metric is one [metric] series: the latest value, its unit, how many
+// samples arrived, and the last 60 as [seconds since start, value].
+type Metric struct {
+	Value   float64      `json:"value"`
+	Unit    string       `json:"unit"`
+	N       int          `json:"n"`
+	History [][2]float64 `json:"history"`
+}
+
+// Stage is one [stage] of a multi-stage job.
+type Stage struct {
+	I        int      `json:"i"`
+	N        int      `json:"n"`
+	Name     string   `json:"name"`
+	StartedS *float64 `json:"started_s"`
+	EndedS   *float64 `json:"ended_s"`
 }
 
 // Project is the where of a run.
@@ -146,7 +174,7 @@ func (r *Run) Now() string {
 		return "ended"
 	}
 	if s.Waiting != nil {
-		w := "waiting"
+		w := cur.Words.Wait
 		if s.Waiting.Kind != "" {
 			w += " (" + s.Waiting.Kind + ")"
 		}
@@ -157,6 +185,9 @@ func (r *Run) Now() string {
 	}
 	if s.Step != "" {
 		return s.Step
+	}
+	if s.Stage != nil {
+		return strings.TrimSpace(fmt.Sprintf("%s %d/%d %s", cur.Words.Stage, s.Stage.I, s.Stage.N, s.Stage.Name))
 	}
 	if s.Activity.Kind == "tool" && s.Activity.Text != "" {
 		// A tool is open right now: more specific than the plan item,

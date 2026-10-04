@@ -156,7 +156,11 @@
       "plan": "RUNDOWN",
       "elapsed": "AIRTIME",
       "now": "NOW PLAYING"
-    }
+    },
+    "metric": "level",
+    "stage": "act",
+    "eta": "off air in",
+    "heartbeat": "last word"
   },
   "background": {
     "kind": "meters",

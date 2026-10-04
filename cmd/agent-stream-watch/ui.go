@@ -606,7 +606,7 @@ func (m *model) setContent(unchanged bool) {
 // leave over.
 func (m *model) layout() {
 	r := m.current()
-	used := len(m.headerLines(r)) + 1 + 1 + len(m.footerLines(r))
+	used := len(m.headerLines(r)) + 1 + 1 + len(m.footerLines(r)) + len(m.telemetryLines(r))
 	if p := m.planLines(r); len(p) > 0 {
 		used += len(p) + 1
 	}
@@ -621,6 +621,7 @@ func (m *model) layout() {
 func (m *model) runView() string {
 	r := m.current()
 	parts := m.headerLines(r)
+	parts = append(parts, m.telemetryLines(r)...)
 	parts = append(parts, m.rule())
 	if p := m.planLines(r); len(p) > 0 {
 		parts = append(parts, p...)

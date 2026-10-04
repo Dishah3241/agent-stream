@@ -291,8 +291,13 @@ Each milestone is a pull request that passes CI on Linux and macOS.
   radio, bottling). The VHS-recorded gallery is not done: VHS is not
   installed in the build environment, so the preview script's theme gallery
   stands in for it.
-- Milestones 4 (Forge `[metric]` and `[stage]`) and 5 (the combined board):
-  not started.
+- Milestone 4, Forge telemetry: done. `[metric]` and `[stage]` pass
+  through every adapter as the agent's own lines; the pane styles them;
+  `state.json` gains `metrics`, `stages`, `stage`, `progress`, `eta_s`, and
+  `counts.metrics`; the watcher's run view gains the telemetry panel. The
+  heartbeat is the age of `state.json`, which the tracker rewrites on every
+  label line.
+- Milestone 5, the combined board: not started.
 
 Changes from the plan, as built: the record carries the requested theme in
 `state.json` (`theme.name`, `theme.loudness`) rather than in

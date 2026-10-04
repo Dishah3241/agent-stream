@@ -156,7 +156,11 @@
       "plan": "EXPOSURE",
       "elapsed": "OPEN",
       "now": "LOG"
-    }
+    },
+    "metric": "magnitude",
+    "stage": "exposure set",
+    "eta": "dawn in",
+    "heartbeat": "last light"
   },
   "background": {
     "kind": "trails",

@@ -162,7 +162,11 @@
       "plan": "ALTITUDE",
       "elapsed": "T+",
       "now": "TELEMETRY"
-    }
+    },
+    "metric": "telemetry",
+    "stage": "stage",
+    "eta": "orbit in",
+    "heartbeat": "last signal"
   },
   "background": {
     "kind": "stars",

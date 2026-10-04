@@ -376,6 +376,25 @@ _ap_emit_stream_line() {
         compacting) _ap_egg_line spice ;;
       esac
       ;;
+    "[metric]"|"[metric] "*)
+      # Forge telemetry: "│ metric residual 0.0031 m/s". Only well-formed
+      # lines are styled; anything else is shown as the agent wrote it.
+      rest="${line#\[metric\]}"; rest="${rest# }"
+      name="${rest%%=*}"
+      kind="${rest#*=}"
+      if [[ "$rest" == *=* && "$name" =~ ^[A-Za-z0-9_.-]{1,40}$ && "${kind%% *}" =~ ^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$ ]]; then
+        word="${kind#"${kind%% *}"}"; word="${word# }"
+        printf -v body '%s%s%s %s %s%s%s%s' "$_AP_DIM" "$_AP_W_METRIC" "$_AP_RESET" "$name" "$_AP_TITLE" "${kind%% *}" "$_AP_RESET" "${word:+ $_AP_DIM$word$_AP_RESET}"
+      else
+        body="$line"
+      fi
+      _ap_box_side "$body"
+      ;;
+    "[stage]"|"[stage] "*)
+      rest="${line#\[stage\]}"; rest="${rest# }"
+      printf -v body '%s%s %s%s %s' "$_AP_HEAD" "$_AP_G_ACTIVE" "$_AP_W_STAGE" "$_AP_RESET" "$rest"
+      _ap_divider "$body"
+      ;;
     "[step]"|"[step] "*)
       rest="${line#\[step\]}"; rest="${rest# }"
       printf -v body '%s%s%s %s' "$_AP_DIM" "$_AP_W_STEP" "$_AP_RESET" "$rest"
@@ -460,9 +479,9 @@ _ap_emit_stream_line() {
 # Hold only recognized label prefixes, not every "[" opener.
 _ap_label_hold() {
   case "$1" in
-    '['|'[t'|'[to'|'[too'|'[tool'|'[tod'|'[todo'|'[th'|'[thi'|'[thin'|'[think'|'[d'|'[do'|'[don'|'[done'|'[e'|'[er'|'[err'|'[erro'|'[error'|'[en'|'[end'|'[w'|'[wa'|'[war'|'[warn'|'[wai'|'[wait'|'[n'|'[no'|'[not'|'[note'|'[r'|'[ru'|'[run'|'[s'|'[st'|'[ste'|'[step')
+    '['|'[t'|'[to'|'[too'|'[tool'|'[tod'|'[todo'|'[th'|'[thi'|'[thin'|'[think'|'[d'|'[do'|'[don'|'[done'|'[e'|'[er'|'[err'|'[erro'|'[error'|'[en'|'[end'|'[w'|'[wa'|'[war'|'[warn'|'[wai'|'[wait'|'[n'|'[no'|'[not'|'[note'|'[r'|'[ru'|'[run'|'[s'|'[st'|'[ste'|'[step'|'[sta'|'[stag'|'[stage'|'[m'|'[me'|'[met'|'[metr'|'[metri'|'[metric')
       return 0 ;;
-    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*)
+    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*|'[metric]'*|'[stage]'*)
       return 0 ;;
   esac
   return 1
@@ -471,7 +490,7 @@ _ap_label_hold() {
 # _ap_is_label LINE: a complete line that the stream restyles.
 _ap_is_label() {
   case "$1" in
-    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*)
+    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*|'[metric]'*|'[stage]'*)
       return 0 ;;
   esac
   return 1

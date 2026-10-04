@@ -65,7 +65,8 @@ func word(w, text string) string {
 	return w + " " + text
 }
 
-var labelRe = regexp.MustCompile(`^\[(run|tool|done|error|warn|note|think|wait|todo|step|end)\](?: (.*)|)$`)
+var labelRe = regexp.MustCompile(`^\[(run|tool|done|error|warn|note|think|wait|todo|step|end|metric|stage)\](?: (.*)|)$`)
+var metricRe = regexp.MustCompile(`^([A-Za-z0-9_.-]{1,40})=([-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?)(?: ([^ ]{1,16}))?$`)
 var todoRe = regexp.MustCompile(`^(\d+)/(\d+) (pending|active|done|dropped)(?: (.*))?$`)
 var ctrlRe = regexp.MustCompile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -181,6 +182,20 @@ func (r *Renderer) Line(raw string) []string {
 		out = append(out, r.divider(body)...)
 	case "todo":
 		out = append(out, r.todoRow(rest)...)
+	case "metric":
+		// Forge telemetry, styled like the pane; anything malformed is
+		// shown as the agent wrote it.
+		if mm := metricRe.FindStringSubmatch(rest); mm != nil {
+			body := stDim.Render(cur.Words.Metric) + " " + mm[1] + " " + stBold.Render(mm[2])
+			if mm[5] != "" {
+				body += " " + stDim.Render(mm[5])
+			}
+			out = append(out, r.side(body))
+		} else {
+			out = append(out, r.side(line))
+		}
+	case "stage":
+		out = append(out, r.divider(stHead.Render(r.m.active+" "+cur.Words.Stage)+" "+rest)...)
 	}
 	r.started = true
 	return out

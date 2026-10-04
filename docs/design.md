@@ -254,7 +254,14 @@ ordinary text and nothing is lost.
 [todo] I/N STATUS text                STATUS in pending | active | done | dropped
 [step] text                           the agent's own one-line description of what it is doing
 [end] OUTCOME exit N elapsed Ns record PATH   written by the capture layer after the worker exits
+[metric] NAME=VALUE [UNIT]            a number from the agent's work, printed by the agent itself
+[stage] I/N NAME                      a stage of a long job, printed by the agent itself
 ```
+
+`[metric]` and `[stage]` come from Forge (docs/spec-themes.md, milestone 4).
+No adapter makes them: an agent prints them on lines of its own and every
+adapter passes its text through. A malformed `[metric]` is shown as text and
+ignored by the state tracker.
 
 Plan lines are self-contained so a tail reader never needs context: `I/N`
 positions the item, `N` is the current plan length. The renderer emits the

@@ -711,4 +711,15 @@ pinned_pipe="$( (export AGENT_RUN_STATUS=pinned; printf '%s\n' '[tool] read a' '
 assert_no_ansi "$pinned_pipe"
 assert_has "$pinned_pipe" "✓ read"
 
+# Forge telemetry lines.
+tel_out="$(printf '%s\n' '[stage] 2/7 mesh' '[metric] residual=0.0031' '[metric] rate=1.5e3 items/s' '[metric] bogus line' | agent_present_stream)"
+assert_has "$tel_out" "── ▸ stage 2/7 mesh"
+assert_has "$tel_out" "│ metric residual 0.0031"
+assert_has "$tel_out" "│ metric rate 1.5e3 items/s"
+assert_has "$tel_out" "│ [metric] bogus line"
+held="$(printf '%s' '[metr' | agent_present_stream)"
+[[ "$held" == '[metr' ]] || fail "an unfinished [metric] prefix is held then printed as text, got: $held"
+tel_evil="$(printf '[metric] x=1 \033[31mred\n' | agent_present_stream)"
+assert_no_ansi "$tel_evil"
+
 echo "agent-present tests: all passed"

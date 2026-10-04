@@ -33,7 +33,7 @@ _ap_theme_base() {
   _AP_G_SKY=() _AP_G_FIELD=()
   _AP_W_TOOL='' _AP_W_DONE='' _AP_W_ERROR='' _AP_W_WARN='' _AP_W_NOTE=''
   _AP_W_THINK='think' _AP_W_WAIT='waiting' _AP_W_STEP='now' _AP_W_PLAN='plan' _AP_W_RUN='run'
-  _AP_W_RESULT_OK='' _AP_W_ALTITUDE='plan' _AP_W_QUIET='quiet' _AP_W_REPORT_TITLE=''
+  _AP_W_RESULT_OK='' _AP_W_ALTITUDE='plan' _AP_W_QUIET='quiet' _AP_W_REPORT_TITLE='' _AP_W_METRIC='metric' _AP_W_STAGE='stage'
   _AP_WH_TASK='task' _AP_WH_CWD='cwd' _AP_WH_AGENT='run' _AP_WH_OUTPUT='output' _AP_WH_LIFTOFF='' _AP_WH_COUNTDOWN=''
   _AP_WR_SUCCESS='done' _AP_WR_FAILED='failed' _AP_WR_ERROR='failed'
   _AP_WR_CANCELLED='cancelled' _AP_WR_EXITED='exited' _AP_WR_ENDED='ended'

@@ -70,7 +70,7 @@ else . end
     ( [["tool","TOOL"],["done","DONE"],["error","ERROR"],["warn","WARN"],["note","NOTE"],
        ["think","THINK"],["wait","WAIT"],["step","STEP"],["plan","PLAN"],["run","RUN"],
        ["result_ok","RESULT_OK"],["altitude","ALTITUDE"],["quiet","QUIET"],
-       ["report_title","REPORT_TITLE"]][]
+       ["report_title","REPORT_TITLE"],["metric","METRIC"],["stage","STAGE"]][]
       | select(($w[.[0]] | type) == "string") | assign("_AP_W_" + .[1]; $w[.[0]]) ),
     ( ($w.header // {}) | to_entries[] | select(.key | test("^(task|cwd|agent|output|liftoff|countdown)$"))
       | assign("_AP_WH_" + (.key | ascii_upcase); .value) ),

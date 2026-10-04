@@ -151,7 +151,11 @@
       "plan": "PROGRESS",
       "elapsed": "TIME",
       "now": "LATEST NOTE"
-    }
+    },
+    "metric": "measure",
+    "stage": "phase",
+    "eta": "due in",
+    "heartbeat": "last revision"
   },
   "background": {
     "kind": "grid",
