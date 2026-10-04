@@ -218,7 +218,7 @@ The watcher honors `NO_COLOR`, `AGENT_RUN_COLOR`, `TERM=dumb`, and the locale li
 ] }
 ```
 
-`ssh` defaults to the name, so a `Host miini` entry in `~/.ssh/config` is all a machine needs; `root` defaults to `~/.agent-stream/runs`; `local` reads this machine's root without ssh. Each machine is one shared OpenSSH connection (`ControlMaster`, socket under the user's cache directory), polled every two seconds in the background by a small POSIX shell command that prints the `state.json` files changed since the last poll. Opening a run reads its `display.txt` with `tail -c +OFFSET`. Nothing is installed on the machines, and nothing is written to them. `AGENT_STREAM_SSH` replaces the `ssh` command.
+`ssh` defaults to the name, so a `Host miini` entry in `~/.ssh/config` is all a machine needs; `root` defaults to `~/.agent-stream/runs`; `local` reads this machine's root without ssh. Each machine is one shared OpenSSH connection (`ControlMaster`; the socket lives in the user's cache directory, or in a private `/tmp/agent-stream-UID` when that path is too long for a socket, as it can be on macOS), polled every two seconds in the background by a small POSIX shell command that prints the `state.json` files changed since the last poll. Opening a run reads its `display.txt` with `tail -c +OFFSET`. Nothing is installed on the machines, and nothing is written to them. `AGENT_STREAM_SSH` replaces the `ssh` command.
 
 The fleet gains a MACHINE column, rows grouped by machine in the file's order, and each row keeps its own project's theme for its callsign and color while the board's own theme draws the rest. A machine that does not answer is one "no signal" row with when it last answered and why; the rest of the board keeps working.
 
@@ -272,6 +272,7 @@ Themes are presentation only: `display.txt` and `state.json` are identical under
 | `AGENT_STREAM_WATCH` | The watcher binary `agent-stream watch` runs (default: `bin/agent-stream-watch`, then `PATH`) |
 | `AGENT_STREAM_PARENT` | Set by `agent-stream run` for its worker: the record of the run a nested run belongs to (`--parent` overrides) |
 | `AGENT_STREAM_SSH` | The ssh command the board runs (default `ssh`), split on spaces |
+| `AGENT_STREAM_SSH_CONTROL` | Where the board keeps its shared-connection sockets (a private directory of yours), or `none` to open a new connection each poll |
 
 ## Where the names come from
 

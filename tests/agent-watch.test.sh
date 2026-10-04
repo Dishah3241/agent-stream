@@ -125,7 +125,7 @@ if [[ "${AGENT_STREAM_REAL_SSH:-}" == 1 ]]; then
   [[ -n "$SSHD" ]] || fail "AGENT_STREAM_REAL_SSH=1 needs sshd"
   command -v ssh >/dev/null || fail "AGENT_STREAM_REAL_SSH=1 needs ssh"
   S="$TMP/sshd"
-  mkdir -p "$S" "$S/home" && chmod 700 "$S"
+  mkdir -p "$S" && chmod 700 "$S"
   ssh-keygen -q -t ed25519 -N '' -f "$S/host_key" || fail "host key"
   ssh-keygen -q -t ed25519 -N '' -f "$S/user_key" || fail "user key"
   cp "$S/user_key.pub" "$S/authorized_keys"
@@ -148,9 +148,12 @@ C
   # Stop sshd and any shared connection even when an assertion fails.
   real_ssh_cleanup() {
     [[ -f "$S/sshd.pid" ]] && kill "$(cat "$S/sshd.pid")" 2>/dev/null
-    find "$S/home" "$S/cache" -type s 2>/dev/null | while IFS= read -r s; do
-      ssh -S "$s" -O exit forge-real >/dev/null 2>&1
-    done
+    if [[ -n "${CTL:-}" ]]; then
+      find "$CTL" -type s 2>/dev/null | while IFS= read -r s; do
+        ssh -S "$s" -O exit forge-real >/dev/null 2>&1
+      done
+      rm -rf "$CTL"
+    fi
     rm -rf "$TMP"
   }
   trap real_ssh_cleanup EXIT
@@ -173,14 +176,15 @@ C
     [[ $i -lt 50 ]] || fail "no login to the private sshd: $(cat "$S/login.err") $(cat "$S/sshd.log")"
     sleep 0.1
   done
+  # A short socket directory: macOS temp paths are too long for a socket.
+  CTL="$(mktemp -d /tmp/asw-ctl.XXXXXX)"
   printf '{"machines": [{"name": "forge", "ssh": "forge-real", "root": "%s/forge/runs"}]}\n' "$TMP" >"$S/board.json"
-  # The cache directory, which holds the ControlMaster socket, under $S.
-  board_env() { HOME="$S/home" XDG_CACHE_HOME="$S/cache" AGENT_STREAM_SSH="ssh -F $S/ssh_config" \
+  board_env() { AGENT_STREAM_SSH_CONTROL="$CTL" AGENT_STREAM_SSH="ssh -F $S/ssh_config" \
     AGENT_STREAM_WATCH="$WATCH" COLUMNS=120 "$@"; }
   board_env "$BIN" board "$S/board.json" --once >"$TMP/realboard" 2>"$TMP/err" || fail "board over real ssh: $(cat "$TMP/err")"
   grep -q '^forge .* fleet' "$TMP/realboard" || fail "real ssh: the forge run is listed: $(cat "$TMP/realboard") $(cat "$TMP/err")"
   grep -Eq '(└|`-) ' "$TMP/realboard" || fail "real ssh: the inner run is nested: $(cat "$TMP/realboard")"
-  sock="$(find "$S/home" "$S/cache" -type s 2>/dev/null | head -n 1)"
+  sock="$(find "$CTL" -type s 2>/dev/null | head -n 1)"
   [[ -n "$sock" ]] || fail "real ssh: the ControlMaster socket persists between polls"
   # A second board reuses the master: it still answers with sshd gone.
   kill "$(cat "$S/sshd.pid")" && rm -f "$S/sshd.pid"

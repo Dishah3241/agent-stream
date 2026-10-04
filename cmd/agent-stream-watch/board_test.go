@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -343,5 +344,53 @@ func TestFleetHeadingLinesUpWithShipsAndMachines(t *testing.T) {
 		if hi < 0 || ri < 0 || len([]rune(head[:hi])) != len([]rune(row[:ri])) {
 			t.Errorf("%q heads column %d but %q starts at %d:\n%s\n%s", pair[0], hi, pair[1], ri, head, row)
 		}
+	}
+}
+
+func TestControlDirIsShortAndPrivate(t *testing.T) {
+	short, err := os.MkdirTemp("/tmp", "asw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(short) })
+
+	t.Setenv("AGENT_STREAM_SSH_CONTROL", "none")
+	if d := ControlDir(); d != "" {
+		t.Errorf("none turns sharing off, got %q", d)
+	}
+	ok := filepath.Join(short, "ok")
+	t.Setenv("AGENT_STREAM_SSH_CONTROL", ok)
+	if d := ControlDir(); d != ok {
+		t.Errorf("a short private directory is used: got %q", d)
+	}
+	if fi, _ := os.Stat(ok); fi == nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the directory is created closed to others: %v", fi)
+	}
+	long := filepath.Join(short, strings.Repeat("d", maxControlDir))
+	t.Setenv("AGENT_STREAM_SSH_CONTROL", long)
+	if d := ControlDir(); d != "" {
+		t.Errorf("a path too long for a socket is not used: %q", d)
+	}
+	open := filepath.Join(short, "open")
+	os.Mkdir(open, 0o755)
+	os.Chmod(open, 0o755)
+	t.Setenv("AGENT_STREAM_SSH_CONTROL", open)
+	if d := ControlDir(); d != "" {
+		t.Errorf("a directory others can enter is not used: %q", d)
+	}
+	link := filepath.Join(short, "link")
+	os.Symlink(ok, link)
+	t.Setenv("AGENT_STREAM_SSH_CONTROL", link)
+	if d := ControlDir(); d != "" {
+		t.Errorf("a symlink is not used: %q", d)
+	}
+
+	// Without the setting, a cache directory too long for a socket falls
+	// back to /tmp.
+	t.Setenv("AGENT_STREAM_SSH_CONTROL", "")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(short, strings.Repeat("c", 80)))
+	t.Setenv("HOME", filepath.Join(short, strings.Repeat("h", 80)))
+	if d := ControlDir(); d != fmt.Sprintf("/tmp/agent-stream-%d", os.Getuid()) {
+		t.Errorf("a long cache directory falls back to /tmp: %q", d)
 	}
 }

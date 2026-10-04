@@ -165,21 +165,15 @@ type Board struct {
 }
 
 // NewBoard prepares a board. The ssh command is $AGENT_STREAM_SSH (split on
-// spaces) or ssh; the connection is shared through a ControlMaster socket
-// under the user's cache directory, the one thing the board creates, and
-// only on this machine.
+// spaces) or ssh; the connection is shared through a ControlMaster socket in
+// ControlDir, the one thing the board creates, and only on this machine.
 func NewBoard(machines []Machine) *Board {
 	b := &Board{Machines: machines, SSH: []string{"ssh"}, Every: 2 * time.Second, Timeout: 20 * time.Second,
 		tails: map[string]*tailJob{}}
 	if v := strings.Fields(os.Getenv("AGENT_STREAM_SSH")); len(v) > 0 {
 		b.SSH = v
 	}
-	if d, err := os.UserCacheDir(); err == nil {
-		d = filepath.Join(d, "agent-stream", "ssh")
-		if os.MkdirAll(d, 0o700) == nil {
-			b.ctl = d
-		}
-	}
+	b.ctl = ControlDir()
 	for range machines {
 		b.state = append(b.state, &machineState{runs: map[string]*Run{}})
 	}
@@ -192,6 +186,45 @@ func (b *Board) Describe() string {
 		names[i] = m.Name
 	}
 	return strings.Join(names, ", ")
+}
+
+// A ControlMaster socket is the directory, "/", the 40-character %C hash,
+// and the 17-character suffix ssh adds while it binds; a Unix socket path
+// holds 104 bytes on macOS (108 on Linux).
+const maxControlDir = 104 - 1 - 1 - 40 - 17
+
+// ControlDir picks where the shared connections' sockets live:
+// $AGENT_STREAM_SSH_CONTROL ("none" turns sharing off), else the user's cache
+// directory when its path is short enough, else a private directory in /tmp.
+// A directory must belong to this user and be closed to everyone else, so no
+// one can plant a socket the board would talk through. "" means no sharing:
+// slower, but still correct.
+func ControlDir() string {
+	var dirs []string
+	if v := os.Getenv("AGENT_STREAM_SSH_CONTROL"); v != "" {
+		if v == "none" {
+			return ""
+		}
+		dirs = []string{v}
+	} else {
+		if d, err := os.UserCacheDir(); err == nil {
+			dirs = append(dirs, filepath.Join(d, "agent-stream", "ssh"))
+		}
+		dirs = append(dirs, fmt.Sprintf("/tmp/agent-stream-%d", os.Getuid()))
+	}
+	for _, d := range dirs {
+		if len(d) > maxControlDir {
+			continue
+		}
+		_ = os.MkdirAll(filepath.Dir(d), 0o700)
+		if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if privateDir(d) {
+			return d
+		}
+	}
+	return ""
 }
 
 // shellQuote quotes s for a POSIX shell.

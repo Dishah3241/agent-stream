@@ -38,7 +38,8 @@ With --board, the fleet is every machine in BOARD_JSON, read over SSH:
 ssh defaults to the name and root to ~/.agent-stream/runs; "local": true
 reads a root on this machine. Each machine is one shared connection
 (ControlMaster); a machine that does not answer is one "no signal" row.
-AGENT_STREAM_SSH replaces the ssh command. Nothing is written to any machine.
+AGENT_STREAM_SSH replaces the ssh command;
+AGENT_STREAM_SSH_CONTROL names the socket directory, or none. Nothing is written to any machine.
 
 Fleet keys: j/k or arrows move, enter opens, a toggles all ended runs,
 r refreshes now, q quits.
