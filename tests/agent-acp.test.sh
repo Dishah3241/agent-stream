@@ -78,8 +78,12 @@ ACP2='{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":2,"info":{"name":"fake
 {"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-v2-5678"}}
 {"jsonrpc":"2.0","id":3,"result":{"messageId":"m1"}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"state_update","state":"running"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_message_chunk","messageId":"m5","content":{"type":"text","text":"Looking around once."}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_thought_chunk","messageId":"th1","content":{"type":"text","text":"V2-THOUGHT-ONCE"}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p1","entries":[{"content":"Inspect","priority":"high","status":"in_progress"},{"content":"Report","priority":"low","status":"pending"}]}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","title":"List files","kind":"search","status":"in_progress","rawInput":{"command":"ls"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_thought","messageId":"th1","content":[{"type":"text","text":"V2-THOUGHT-ONCE"}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_message","messageId":"m5","content":[{"type":"text","text":"Looking around once."}]}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"tool_call_content_chunk","toolCallId":"t1","content":{"type":"content","content":{"type":"text","text":"SECRET-V2-CHUNK"}}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"notice","severity":"warning","title":"Rate limited, retrying in 2s"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"compaction_update","compactionId":"c1","status":"in_progress"}}}
@@ -113,7 +117,9 @@ grep -qx '\[note\] context compacted' "$RENDER_OUT" || fail "compaction complete
 grep -qx '\[done\] List files' "$RENDER_OUT" || fail "v2 tool completed"
 grep -q 'SECRET-V2-RAW' "$RENDER_OUT" && fail "v2 rawOutput never dumped"
 grep -qx '\[note\] subagent running: Explore the tests' "$RENDER_OUT" || fail "subagent_update"
-grep -qx 'All done.' "$RENDER_OUT" || fail "v2 whole agent_message renders"
+grep -qx 'All done.' "$RENDER_OUT" || fail "v2 whole agent_message renders, also after an earlier message streamed as chunks"
+[[ "$(grep -c 'Looking around once.' "$RENDER_OUT")" == 1 ]] || fail "a whole v2 message whose messageId streamed as chunks is not repeated"
+[[ "$(grep -c 'V2-THOUGHT-ONCE' "$RENDER_OUT")" == 1 ]] || fail "a whole v2 thought whose messageId streamed as chunks is not repeated after a label line"
 grep -qx '\[wait\] input: the agent needs your action' "$RENDER_OUT" || fail "requires_action is a wait"
 grep -qx '\[wait\] permission: Write notes.txt' "$RENDER_OUT" || fail "v2 permission request uses the title: $(grep permission "$RENDER_OUT")"
 grep -qx '\[wait\] permission: Run a command (make test)' "$RENDER_OUT" || fail "v2 command subject shows the command: $(grep permission "$RENDER_OUT")"
@@ -200,6 +206,7 @@ while IFS= read -r line; do
     session/prompt)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"messageId":"m1"}}\n' "$id"
       u '{"sessionUpdate":"state_update","state":"running"}'
+      u '{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"Inspecting.\n"}}'
       u '{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p1","entries":[{"content":"Inspect","priority":"high","status":"completed"}]}}'
       u '{"sessionUpdate":"agent_message","messageId":"m2","content":[{"type":"text","text":"All done."}]}'
       if [[ -n "${FAKE_ACP_NOSTOP:-}" ]]; then

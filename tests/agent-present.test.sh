@@ -589,6 +589,9 @@ run_out="$(printf '%s\n' '[run] claude claude-opus-5-5 session 3f9c2a71' '[run] 
 assert_has "$run_out" "│ run claude claude-opus-5-5 session 3f9c2a71"
 assert_has "$run_out" "│ ✓ result success (4210ms, 3 turns)"
 assert_has "$run_out" "│ ! result error_max_turns (1ms, 9 turns)"
+acp_out="$(printf '%s\n' '[run] result end_turn (12400 tokens)' '[run] result refusal (31 tokens)' | agent_present_stream)"
+assert_has "$acp_out" "│ ✓ result end_turn (12400 tokens)"
+assert_has "$acp_out" "│ ! result refusal (31 tokens)"
 run_color_out="$(run_color '[run] result success (1ms, 1 turns)' agent_present_stream)"
 assert_style "$run_color_out" 32
 

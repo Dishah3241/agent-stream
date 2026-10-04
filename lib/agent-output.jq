@@ -742,19 +742,32 @@ def acp_tool($u):
 
 def acp_update($u):
   ($u.sessionUpdate // "") as $k
+  # v2 chunks and whole messages carry a messageId: a whole message whose
+  # id already arrived as chunks is not repeated, and any other whole
+  # message is shown. Without ids (protocol 1) the turn-wide flags decide.
+  | (safe($u.messageId // "")) as $mid
   | if $k == "agent_message_chunk" then
       (acp_text($u.content) | clean) as $d
-      | if $d == "" then . else .saw_delta = true | .last_text = (.last_text + $d) | raw_after_think($d) end
+      | if $d == "" then .
+        else .saw_delta = true | .last_text = (.last_text + $d)
+             | (if $mid != "" then ._acp_streamed = ((.["_acp_streamed"] // {}) + {($mid): true}) else . end)
+             | raw_after_think($d) end
     elif $k == "agent_message" then
       (acp_text($u.content) | clean) as $t
-      | if .saw_delta then .saw_delta = false
+      | if $mid != "" and ((.["_acp_streamed"] // {})[$mid] // false) then
+          .saw_delta = false | ._acp_streamed = (.["_acp_streamed"] | del(.[$mid]))
+        elif $mid == "" and .saw_delta then .saw_delta = false
         elif ($t | gsub("^\\s+|\\s+$"; "") | length) == 0 then .
-        else .last_text = $t | raw_after_think($t) end
+        else .saw_delta = false | .last_text = $t | raw_after_think($t) end
     elif $k == "agent_thought_chunk" then
-      think_delta(acp_text($u.content) | clean)
+      (acp_text($u.content) | clean) as $d
+      | (if $mid != "" and $d != "" then ._acp_streamed = ((.["_acp_streamed"] // {}) + {($mid): true}) else . end)
+      | think_delta($d)
     elif $k == "agent_thought" then
       (acp_text($u.content) | clean) as $t
-      | if .thinking then .thinking = false
+      | if $mid != "" and ((.["_acp_streamed"] // {})[$mid] // false) then
+          ._acp_streamed = (.["_acp_streamed"] | del(.[$mid]))
+        elif $mid == "" and .thinking then .thinking = false
         elif ($t | gsub("^\\s+|\\s+$"; "") | length) == 0 then .
         else emit("[think]") | .out = (.out + ($t | sub("\n+$"; "")) + "\n") | .thinking = false end
     elif $k == "tool_call" or $k == "tool_call_update" then
