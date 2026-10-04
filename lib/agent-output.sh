@@ -4,7 +4,7 @@
 #
 #   agent_output_render FORMAT < events.jsonl > display.txt
 #
-# FORMAT is one of pi-json, claude-json, cursor-json, grok-json, text;
+# FORMAT is one of pi-json, claude-json, cursor-json, grok-json, acp-json, text;
 # anything else is rejected with a usage diagnostic and exit 2. The
 # space-separated AGENT_OUTPUT_FORMATS string is a list for callers, never
 # itself a valid FORMAT. The renderer is pure: it consumes stdin and writes
@@ -43,6 +43,25 @@
 #           Thought deltas stream after a [think] line. Ignore usage,
 #           signature, available_commands, and whole tool content/rawOutput.
 #
+#   acp     Agent Client Protocol agents (newline-delimited JSON-RPC on the
+#           agent's stdout, protocol 1 and the v2 schema). Shapes come from
+#           the published @agentclientprotocol/sdk JSON schemas, read in
+#           full; no ACP agent was run here. session/update notifications,
+#           session/request_permission requests, and the responses to
+#           initialize / session/new / session/prompt are rendered; the
+#           bridge in bin/agent-stream drives an agent through those
+#           three requests and answers permission requests.
+#
+#   claude  Claude Code 2.1 adds (observed in real runs here): TaskCreate /
+#           TaskUpdate / TaskList as the plan tools (TodoWrite is gone from
+#           that build but still handled), system task_summary (a one-line
+#           "what I am doing"), post_turn_summary (status_detail,
+#           needs_action), task_started / task_progress / task_notification
+#           around subagents, control_request can_use_tool when the
+#           dispatcher wires --permission-prompt-tool stdio, top-level
+#           active_goal and autocompact_state (quiet), and
+#           result.permission_denials.
+#
 #   text    not JSON: worker lines pass through sanitized. Native Codex,
 #           and OpenCode text output use this mode. Installed
 #           OpenCode help supports JSON; no JSON adapter is assigned here.
@@ -62,7 +81,7 @@
 # construction and validation belong to the integration); agent_output_render
 # validates FORMAT by word membership, never by treating this string as one
 # format name.
-AGENT_OUTPUT_FORMATS="pi-json claude-json cursor-json grok-json text"
+AGENT_OUTPUT_FORMATS="pi-json claude-json cursor-json grok-json acp-json text"
 
 # Directory of this file, resolved once at source time so a later
 # BASH_SOURCE[0] (eval, sourced-from-stdin) cannot point jq at cwd.

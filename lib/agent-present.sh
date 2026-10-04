@@ -74,15 +74,21 @@ _ap_style_init() {
   fi
   # Marks and separators: unicode where the terminal plausibly renders it,
   # ASCII otherwise. Every non-ASCII glyph printed anywhere comes from here.
+  # Waiting keeps "~" in both sets: it reads as "pending" everywhere and the
+  # word "waiting" always accompanies it.
   _AP_M_HEAD='>' _AP_M_STEP='-' _AP_M_DONE='+' _AP_M_ERR='x' _AP_M_WARN='!'
-  _AP_M_UNK='?' _AP_M_IDLE='.' _AP_SEP='-' _AP_DASH='-'
+  _AP_M_UNK='?' _AP_M_IDLE='.' _AP_M_WAIT='~' _AP_M_DROP='-' _AP_SEP='-' _AP_DASH='-'
   _AP_TL='+' _AP_BL='+' _AP_H='-' _AP_V='|' _AP_H2='--'
   _AP_WIDTH=80
   local ctype="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
   if [[ "${TERM:-}" != "dumb" && "$ctype" == *[Uu][Tt][Ff]-8* ]]; then
     _AP_M_HEAD='▸' _AP_M_STEP='·' _AP_M_DONE='✓' _AP_M_ERR='✗' _AP_M_WARN='!'
-    _AP_M_UNK='?' _AP_M_IDLE='·' _AP_SEP='·' _AP_DASH='—'
+    _AP_M_UNK='?' _AP_M_IDLE='·' _AP_M_WAIT='~' _AP_M_DROP='–' _AP_SEP='·' _AP_DASH='—'
     _AP_TL='┌' _AP_BL='└' _AP_H='─' _AP_V='│' _AP_H2='──'
+  fi
+  _AP_ELL='...'
+  if [[ "${TERM:-}" != "dumb" && "$ctype" == *[Uu][Tt][Ff]-8* ]]; then
+    _AP_ELL='…'
   fi
   local _w="${COLUMNS:-80}"
   case "$_w" in ''|*[!0-9]*) _w=80 ;; esac
@@ -196,6 +202,39 @@ _ap_field() {
   printf '  %s%-7s%s %s\n' "$_AP_DIM" "$1" "$_AP_RESET" "$2"
 }
 
+# _ap_count N WORD: "1 tool", "2 tools".
+_ap_count() {
+  local n="$1"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [[ "$n" == 1 ]]; then printf '%s %s' "$n" "$2"; else printf '%s %ss' "$n" "$2"; fi
+}
+
+# _ap_duration SECONDS: 42s, 3m12s, 1h02m. Non-numbers read as 0s.
+_ap_duration() {
+  local s="$1"
+  case "$s" in ''|*[!0-9]*) s=0 ;; esac
+  if (( s < 60 )); then printf '%ss' "$s"
+  elif (( s < 3600 )); then printf '%sm%02ds' "$((s / 60))" "$((s % 60))"
+  else printf '%sh%02dm' "$((s / 3600))" "$(((s % 3600) / 60))"
+  fi
+}
+
+# _ap_shorten TEXT WIDTH: one line, cut to WIDTH with an ellipsis mark.
+# Tabs and newlines fold to spaces. Used for the task in headers and cards;
+# the full text lives in the record.
+_ap_shorten() {
+  local t="$1" w="$2"
+  t="${t//$'\n'/ }"
+  t="${t//$'\t'/ }"
+  case "$w" in ''|*[!0-9]*) w=60 ;; esac
+  if (( w < 8 )); then w=8; fi
+  if (( ${#t} > w )); then
+    printf '%s%s' "${t:0:$((w - 1))}" "$_AP_ELL"
+  else
+    printf '%s' "$t"
+  fi
+}
+
 # _ap_json PAYLOAD EXPRESSION: evaluate a jq expression that yields raw
 # text. jq -r decodes \uXXXX escapes, so sanitization downstream sees the
 # real bytes an attacker sent.
@@ -234,10 +273,87 @@ _ap_tsv() {
   printf '%s' "${s%%$'\t'*}"
 }
 
+# _ap_todo_row REST: "I/N STATUS text" as one plan row. Consecutive rows
+# share one "── · plan" divider; the mark and the position carry the state
+# without color: ✓ done, ▸ active, · pending, – dropped (+ > . - in ASCII).
+_ap_todo_row() {
+  local rest="$1" pos status text mark color body
+  pos="${rest%% *}"; rest="${rest#"$pos"}"; rest="${rest# }"
+  status="${rest%% *}"; text="${rest#"$status"}"; text="${text# }"
+  case "$status" in
+    done)    mark="$_AP_M_DONE" color="$_AP_OK" ;;
+    active)  mark="$_AP_M_HEAD" color="$_AP_HEAD" ;;
+    dropped) mark="$_AP_M_DROP" color="$_AP_DIM" ;;
+    pending) mark="$_AP_M_IDLE" color="$_AP_DIM" ;;
+    *)       mark="$_AP_M_UNK" color="$_AP_WARN"; text="$status $text"; status="" ;;
+  esac
+  if [[ "${_AP_PREV_TODO:-0}" != 1 ]]; then
+    printf -v body '%s%s plan%s' "$_AP_DIM" "$_AP_M_STEP" "$_AP_RESET"
+    _ap_divider "$body"
+  fi
+  case "$status" in
+    active) printf -v body '%s%s%s %s%s%s %s' "$color" "$mark" "$_AP_RESET" "$_AP_DIM" "$pos" "$_AP_RESET" "$text" ;;
+    done)   printf -v body '%s%s%s %s%s %s%s' "$color" "$mark" "$_AP_RESET" "$_AP_DIM" "$pos" "$text" "$_AP_RESET" ;;
+    *)      printf -v body '%s%s %s %s%s' "$color" "$mark" "$pos" "$text" "$_AP_RESET" ;;
+  esac
+  _ap_box_side "$body"
+  _AP_PREV_TODO=1
+}
+
 _ap_emit_stream_line() {
-  local line rest name body
+  local line rest name body kind
   line="$(_ap_sanitize "$1")"
   case "$line" in
+    "[todo]"|"[todo] "*) ;;
+    *) _AP_PREV_TODO=0 ;;
+  esac
+  case "$line" in
+    "[todo]"|"[todo] "*)
+      rest="${line#\[todo\]}"; rest="${rest# }"
+      _ap_todo_row "$rest"
+      ;;
+    "[wait]"|"[wait] "*)
+      rest="${line#\[wait\]}"; rest="${rest# }"
+      kind="${rest%% *}"; kind="${kind%:}"
+      rest="${rest#"${rest%% *}"}"; rest="${rest# }"
+      if [[ -n "$kind" ]]; then
+        printf -v body '%s%s waiting%s %s(%s)%s %s' "$_AP_WARN" "$_AP_M_WAIT" "$_AP_RESET" "$_AP_DIM" "$kind" "$_AP_RESET" "$rest"
+      else
+        printf -v body '%s%s waiting%s' "$_AP_WARN" "$_AP_M_WAIT" "$_AP_RESET"
+      fi
+      _ap_box_side "$body"
+      ;;
+    "[step]"|"[step] "*)
+      rest="${line#\[step\]}"; rest="${rest# }"
+      printf -v body '%snow%s %s' "$_AP_DIM" "$_AP_RESET" "$rest"
+      _ap_box_side "$body"
+      ;;
+    "[run] result "*)
+      rest="${line#\[run\] result }"
+      case "$rest" in
+        success*|end_turn*|end*|stop*)
+          printf -v body '%s%s%s %sresult %s%s' "$_AP_OK" "$_AP_M_DONE" "$_AP_RESET" "$_AP_DIM" "$rest" "$_AP_RESET" ;;
+        *)
+          printf -v body '%s%s%s result %s' "$_AP_WARN" "$_AP_M_WARN" "$_AP_RESET" "$rest" ;;
+      esac
+      _ap_box_side "$body"
+      ;;
+    "[run]"|"[run] "*)
+      rest="${line#\[run\]}"; rest="${rest# }"
+      printf -v body '%srun %s%s' "$_AP_DIM" "$rest" "$_AP_RESET"
+      _ap_box_side "$body"
+      ;;
+    "[end]"|"[end] "*)
+      rest="${line#\[end\]}"; rest="${rest# }"
+      kind="${rest%% *}"
+      case "$kind" in
+        success)          printf -v body '%s%s%s %s' "$_AP_OK" "$_AP_M_DONE" "$_AP_RESET" "$rest" ;;
+        failed|error)     printf -v body '%s%s %s%s' "$_AP_ERR" "$_AP_M_ERR" "$rest" "$_AP_RESET" ;;
+        cancelled)        printf -v body '%s%s %s%s' "$_AP_WARN" "$_AP_M_WARN" "$rest" "$_AP_RESET" ;;
+        *)                printf -v body '%s%s %s%s' "$_AP_DIM" "$_AP_M_IDLE" "$rest" "$_AP_RESET" ;;
+      esac
+      _ap_divider "$body"
+      ;;
     "[tool]"|"[tool] "*)
       rest="${line#\[tool\]}"; rest="${rest# }"
       if [[ -n "$rest" ]]; then
@@ -287,9 +403,18 @@ _ap_emit_stream_line() {
 # Hold only recognized label prefixes, not every "[" opener.
 _ap_label_hold() {
   case "$1" in
-    '['|'[t'|'[to'|'[too'|'[tool'|'[th'|'[thi'|'[thin'|'[think'|'[d'|'[do'|'[don'|'[done'|'[e'|'[er'|'[err'|'[erro'|'[error'|'[w'|'[wa'|'[war'|'[warn'|'[n'|'[no'|'[not'|'[note')
+    '['|'[t'|'[to'|'[too'|'[tool'|'[tod'|'[todo'|'[th'|'[thi'|'[thin'|'[think'|'[d'|'[do'|'[don'|'[done'|'[e'|'[er'|'[err'|'[erro'|'[error'|'[en'|'[end'|'[w'|'[wa'|'[war'|'[warn'|'[wai'|'[wait'|'[n'|'[no'|'[not'|'[note'|'[r'|'[ru'|'[run'|'[s'|'[st'|'[ste'|'[step')
       return 0 ;;
-    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*)
+    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# _ap_is_label LINE: a complete line that the stream restyles.
+_ap_is_label() {
+  case "$1" in
+    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*)
       return 0 ;;
   esac
   return 1
@@ -305,6 +430,7 @@ _ap_emit_plain() {
     printf '%s' "$1"
   fi
   _AP_STREAM_STARTED=1
+  _AP_PREV_TODO=0
 }
 
 _ap_stream_flush_plain() {
@@ -314,10 +440,71 @@ _ap_stream_flush_plain() {
   fi
 }
 
+# _ap_state_fields: one @tsv line from $run/state.json, or nothing. Fields:
+# 0 elapsed 1 project 2 branch 3 todo done 4 todo total 5 active todo
+# 6 activity kind 7 activity text 8 waiting text 9 tools 10 errors
+# 11 status 12 step. One jq call; every field is sanitized by the caller.
+_ap_state_fields() {
+  local f="${run:-}/state.json"
+  [[ -n "${run:-}" && -r "$f" && ! -L "$f" ]] || return 1
+  jq -r '
+    def s: if type == "string" or type == "number" then tostring else "" end;
+    [ (if .status == "ended" then (.elapsed_s // 0)
+       else ((now - ((.started_at | fromdate?) // now)) | floor) end),
+      (.project.name | s), (.project.branch | s),
+      (.todo_counts.done // 0), (.todo_counts.total // 0),
+      ([.todos[]? | select(.status == "active") | .text] | first // ""),
+      (.activity.kind | s), (.activity.text | s),
+      (if .waiting == null then "" else ((.waiting.kind | s) + " " + (.waiting.text | s)) end),
+      (.counts.tools // 0), (.counts.errors // 0),
+      (.status | s), (.step | s) ] | @tsv' "$f" 2>/dev/null
+}
+
+# _ap_status_card: one dim line that answers "where is this run" from the
+# state file: elapsed, project and branch, plan progress, what is happening
+# now or what it is waiting for, tool and error counts. Terminal only; it
+# is never part of display.txt.
+_ap_status_card() {
+  local row el proj branch ndone total active akind atext waiting tools errors st step
+  local now_word="" card
+  row="$(_ap_state_fields)" || return 0
+  [[ -n "$row" ]] || return 0
+  el="$(_ap_tsv "$row" 0)"; proj="$(_ap_sanitize "$(_ap_tsv "$row" 1)")"
+  branch="$(_ap_sanitize "$(_ap_tsv "$row" 2)")"
+  ndone="$(_ap_tsv "$row" 3)"; total="$(_ap_tsv "$row" 4)"
+  active="$(_ap_sanitize "$(_ap_tsv "$row" 5)")"
+  akind="$(_ap_tsv "$row" 6)"; atext="$(_ap_sanitize "$(_ap_tsv "$row" 7)")"
+  waiting="$(_ap_sanitize "$(_ap_tsv "$row" 8)")"
+  tools="$(_ap_tsv "$row" 9)"; errors="$(_ap_tsv "$row" 10)"
+  st="$(_ap_tsv "$row" 11)"; step="$(_ap_sanitize "$(_ap_tsv "$row" 12)")"
+  card="$(_ap_duration "$el")"
+  if [[ -n "$proj" ]]; then card="$card $_AP_SEP $proj${branch:+ $branch}"; fi
+  if [[ "$total" != 0 && -n "$total" ]]; then
+    card="$card $_AP_SEP plan $ndone/$total"
+    if [[ -n "$active" ]]; then card="$card: $(_ap_shorten "$active" 40)"; fi
+  fi
+  if [[ -n "$waiting" && "$st" == "waiting" ]]; then
+    now_word="${_AP_WARN}waiting${_AP_RESET} $(_ap_shorten "$waiting" 50)"
+  elif [[ -n "$step" ]]; then
+    now_word="now $(_ap_shorten "$step" 50)"
+  elif [[ "$akind" == "tool" && -n "$atext" ]]; then
+    now_word="now $(_ap_shorten "$atext" 50)"
+  elif [[ "$akind" == "think" ]]; then
+    now_word="thinking"
+  elif [[ -n "$atext" ]]; then
+    now_word="last $(_ap_shorten "$atext" 50)"
+  fi
+  if [[ -n "$now_word" ]]; then card="$card $_AP_SEP $now_word"; fi
+  card="$card $_AP_SEP $(_ap_count "$tools" tool)"
+  if [[ "$errors" != 0 ]]; then card="$card, ${_AP_ERR}$(_ap_count "$errors" error)${_AP_RESET}"; fi
+  printf '%s%s%s %s%s%s\n' "$_AP_DIM" "$_AP_H2" "$_AP_RESET" "$_AP_DIM" "$card" "$_AP_RESET"
+}
+
 # One plain identity line on the first rendered line and every 40 after,
-# so a 120-line pane read still shows the run and the display path.
+# so a 120-line pane read still shows the run and the display path, and a
+# status card from state.json on the same cadence when a record is set.
 _ap_stream_note() {
-  [[ -n "${AGENT_RUN_RUN:-}" ]] || return 0
+  [[ -n "${AGENT_RUN_RUN:-}${run:-}" ]] || return 0
   _AP_NOTE_LINES=$(( ${_AP_NOTE_LINES:-0} + 1 ))
   if (( _AP_NOTE_LINES != 1 && _AP_NOTE_LINES % 40 != 0 )); then
     return 0
@@ -326,7 +513,96 @@ _ap_stream_note() {
   if [[ -n "${run:-}" ]]; then
     dest="$run/display.txt"
   fi
-  printf 'agent-run %s streaming %s\n' "$AGENT_RUN_RUN" "$dest"
+  if [[ -n "${AGENT_RUN_RUN:-}" ]]; then
+    printf 'agent-run %s streaming %s\n' "$AGENT_RUN_RUN" "$dest"
+  fi
+  if (( _AP_NOTE_LINES != 1 )); then
+    _ap_status_card
+  fi
+  _AP_PREV_TODO=0
+}
+
+# ------------------------------------------------------------ pinned mode --
+# AGENT_RUN_STATUS=pinned keeps a two-line footer at the bottom of the
+# terminal while the stream scrolls above it in a DECSTBM region. Terminal
+# only: it needs a tty, a TERM that is not dumb, and tput; it never writes
+# to any file. The footer is redrawn at most once a second from state.json.
+# Known cost: lines that scroll inside a reduced region do not reach the
+# scrollback of several terminals, which is why this is opt-in.
+_ap_pinned_init() {
+  _AP_PIN=0
+  [[ "${AGENT_RUN_STATUS:-}" == pinned ]] || return 0
+  [[ -t 1 && "${TERM:-dumb}" != dumb ]] || return 0
+  command -v tput >/dev/null 2>&1 || return 0
+  _AP_PIN_ROWS="$(tput lines 2>/dev/null)" || return 0
+  _AP_PIN_COLS="$(tput cols 2>/dev/null)" || return 0
+  case "$_AP_PIN_ROWS$_AP_PIN_COLS" in *[!0-9]*|'') return 0 ;; esac
+  (( _AP_PIN_ROWS >= 6 )) || return 0
+  _AP_PIN=1
+  _AP_PIN_TOP=$(( _AP_PIN_ROWS - 2 ))
+  _AP_PIN_LAST=-1
+  printf '\033[1;%dr\033[%d;1H' "$_AP_PIN_TOP" "$_AP_PIN_TOP"
+  trap '_ap_pinned_exit' EXIT
+  trap '_ap_pinned_exit; exit 130' INT TERM
+  trap '_ap_pinned_resize' WINCH
+}
+
+_ap_pinned_resize() {
+  local rows
+  rows="$(tput lines 2>/dev/null)" || return 0
+  case "$rows" in ''|*[!0-9]*) return 0 ;; esac
+  (( rows >= 6 )) || return 0
+  _AP_PIN_ROWS="$rows"
+  _AP_PIN_COLS="$(tput cols 2>/dev/null || echo 80)"
+  _AP_PIN_TOP=$(( rows - 2 ))
+  printf '\033[1;%dr' "$_AP_PIN_TOP"
+  _AP_PIN_LAST=-1
+}
+
+_ap_pinned_exit() {
+  [[ "${_AP_PIN:-0}" == 1 ]] || return 0
+  printf '\033[r\033[%d;1H\033[J' "$_AP_PIN_TOP"
+  _AP_PIN=0
+}
+
+# _ap_pinned_draw: save cursor, write both footer rows cut to the width,
+# restore cursor. Plain text fields only; color stays inside the palette.
+_ap_pinned_draw() {
+  [[ "${_AP_PIN:-0}" == 1 ]] || return 0
+  if [[ "$SECONDS" == "$_AP_PIN_LAST" ]]; then return 0; fi
+  _AP_PIN_LAST="$SECONDS"
+  local row el proj branch ndone total active akind atext waiting tools errors st step
+  local l1 l2 w=$(( _AP_PIN_COLS - 1 ))
+  row="$(_ap_state_fields)" || row=""
+  if [[ -z "$row" ]]; then
+    l1="$(_ap_duration "$SECONDS") $_AP_SEP no state yet"
+    l2=""
+  else
+    el="$(_ap_tsv "$row" 0)"; proj="$(_ap_sanitize "$(_ap_tsv "$row" 1)")"
+    branch="$(_ap_sanitize "$(_ap_tsv "$row" 2)")"
+    ndone="$(_ap_tsv "$row" 3)"; total="$(_ap_tsv "$row" 4)"
+    active="$(_ap_sanitize "$(_ap_tsv "$row" 5)")"
+    akind="$(_ap_tsv "$row" 6)"; atext="$(_ap_sanitize "$(_ap_tsv "$row" 7)")"
+    waiting="$(_ap_sanitize "$(_ap_tsv "$row" 8)")"
+    tools="$(_ap_tsv "$row" 9)"; errors="$(_ap_tsv "$row" 10)"
+    st="$(_ap_tsv "$row" 11)"; step="$(_ap_sanitize "$(_ap_tsv "$row" 12)")"
+    l1="${proj:-run}${branch:+ $branch} $_AP_SEP $(_ap_duration "$el")"
+    if [[ "$total" != 0 && -n "$total" ]]; then l1="$l1 $_AP_SEP plan $ndone/$total"; fi
+    l1="$l1 $_AP_SEP $(_ap_count "$tools" tool)"
+    if [[ "$errors" != 0 && -n "$errors" ]]; then l1="$l1, $(_ap_count "$errors" error)"; fi
+    if [[ "$st" == ended ]]; then l2="ended"
+    elif [[ "$st" == waiting && -n "$waiting" ]]; then l2="waiting $waiting"
+    elif [[ -n "$active" ]]; then l2="step $active${step:+ $_AP_SEP $step}"
+    elif [[ -n "$step" ]]; then l2="now $step"
+    elif [[ "$akind" == tool ]]; then l2="now $atext"
+    else l2="${akind:-idle} ${atext}"
+    fi
+  fi
+  l1="$(_ap_shorten "$l1" "$w")"
+  l2="$(_ap_shorten "$l2" "$w")"
+  printf '\0337\033[%d;1H\033[K%s%s%s\033[%d;1H\033[K%s%s%s\0338' \
+    "$(( _AP_PIN_TOP + 1 ))" "$_AP_DIM" "$l1" "$_AP_RESET" \
+    "$(( _AP_PIN_TOP + 2 ))" "$_AP_DIM" "$l2" "$_AP_RESET"
 }
 
 _ap_stream_putc() {
@@ -368,6 +644,7 @@ _ap_stream_putc() {
       _ap_emit_stream_line "$_AP_LINE"
       _AP_LINE=""
       _ap_stream_note
+      _ap_pinned_draw
       return 0
     fi
     _AP_LINE="${_AP_LINE}${c}"
@@ -382,19 +659,24 @@ _ap_stream_putc() {
   if [[ "$c" == $'\n' ]]; then
     _ap_stream_flush_plain
     printf '\n'
+    _AP_PREV_TODO=0
     _ap_stream_note
+    _ap_pinned_draw
     return 0
   fi
   _AP_PLAIN="${_AP_PLAIN}${c}"
 }
 
 # agent_present_header: read one JSON object {id,agent,label,cwd,dir,
-# model_requested?,model_source?} and print a compact run header. The model
-# line always says "requested"; a null request is shown as the harness
-# default. This layer never claims to know the model that actually ran.
+# model_requested?,model_source?,project?,branch?,task?} and print a compact
+# run header: who is working where, on what. The title is the project and
+# branch when known, else the label, else the run id. The task is shown
+# shortened to the rule width; the record keeps it in full. The model line
+# always says "requested"; a null request is shown as the harness default.
+# This layer never claims to know the model that actually ran.
 agent_present_header() {
   _ap_style_init
-  local id agent label cwd dir model_requested model_source
+  local id agent label cwd dir model_requested model_source project branch task
   local title model_src
   _ap_read_one_object "header input is not a single JSON object" || return 2
   id="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.id')")"
@@ -404,10 +686,20 @@ agent_present_header() {
   dir="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.dir')")"
   model_requested="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.model_requested')")"
   model_source="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.model_source')")"
+  project="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.project')")"
+  branch="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.branch')")"
+  task="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.task')")"
 
-  if [[ -n "$label" ]]; then title="$label"; else title="run $id"; fi
+  if [[ -n "$project" ]]; then title="$project${branch:+ ${_AP_SEP} $branch}"
+  elif [[ -n "$label" ]]; then title="$label"
+  else title="run $id"; fi
   _ap_hr
   printf '%s%s%s\n' "$_AP_HEAD" "$_AP_M_HEAD $title" "$_AP_RESET"
+  if [[ -n "$task" ]]; then
+    _ap_field "task" "$(_ap_shorten "$task" $((_AP_WIDTH - 10)))"
+  elif [[ -n "$label" && -n "$project" ]]; then
+    _ap_field "task" "$(_ap_shorten "$label" $((_AP_WIDTH - 10)))"
+  fi
   _ap_field "run" "$id${agent:+ ${_AP_SEP} $agent}"
   if [[ -n "$model_requested" ]]; then
     model_src=""
@@ -432,26 +724,42 @@ agent_present_header() {
 # truncated or rewrapped.
 agent_present_stream() {
   _ap_style_init
-  local c=""
+  local c="" rc
   _AP_PLAIN=""
   _AP_LINE=""
   _AP_ESC_BUF=""
   _AP_STREAM_STARTED=0
   _AP_OPEN_CARDS=0
+  _AP_PREV_TODO=0
   _AP_STREAM_HAD_OUTPUT=0
   _AP_STREAM_TRAILING_NEWLINE=1
+  _ap_pinned_init
   # Builtin read -n 1: no per-byte subprocess. Flush plain text after each
   # byte so newline-free progress is visible before EOF. Label lines stay
   # held until newline or until they are no longer a recognized prefix.
+  # In pinned mode the read times out once a second so the footer's clock
+  # moves while the agent is silent; a timeout is not EOF.
   while true; do
     c=""
-    if IFS= read -r -n 1 c; then
+    rc=0
+    if [[ "${_AP_PIN:-0}" == 1 ]]; then
+      IFS= read -r -n 1 -t 1 c || rc=$?
+    else
+      IFS= read -r -n 1 c || rc=$?
+    fi
+    if (( rc == 0 )); then
       if [[ -z "$c" ]]; then
         _ap_stream_putc $'\n'
       else
         _ap_stream_putc "$c"
         _ap_stream_flush_plain
       fi
+    elif (( rc > 128 )) && [[ "${_AP_PIN:-0}" == 1 ]]; then
+      if [[ -n "$c" ]]; then
+        _ap_stream_putc "$c"
+        _ap_stream_flush_plain
+      fi
+      _ap_pinned_draw
     else
       if [[ -n "$c" ]]; then
         _ap_stream_putc "$c"
@@ -460,17 +768,70 @@ agent_present_stream() {
     fi
   done
   if [[ -n "${_AP_LINE:-}" ]]; then
-    case "$_AP_LINE" in
-      '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*)
-        _ap_emit_stream_line "$_AP_LINE" ;;
-      *)
-        # Incomplete prefix or ordinary bracket text: no extra EOF newline.
-        _ap_emit_plain "$_AP_LINE" ;;
-    esac
+    if _ap_is_label "$_AP_LINE"; then
+      _ap_emit_stream_line "$_AP_LINE"
+    else
+      # Incomplete prefix or ordinary bracket text: no extra EOF newline.
+      _ap_emit_plain "$_AP_LINE"
+    fi
     _AP_LINE=""
   fi
   _AP_ESC_BUF=""
   _ap_stream_flush_plain
+  _ap_pinned_exit
+  return 0
+}
+
+# agent_present_end: read one state.json object (docs/design.md section 6)
+# and print the ending card: the outcome word with its mark, the exit
+# status, elapsed time, plan progress, tool and error counts, the agent's
+# own summary when it gave one, the last error when it failed, and where
+# the record is. Nothing here is ever called accepted or reviewed.
+agent_present_end() {
+  _ap_style_init
+  local kind exit_code el ndone total tools errors summary last_error dir word color mark
+  local line task
+  _ap_read_one_object "end input is not a single state object" || return 2
+  kind="$(_ap_scalar "$_AP_PAYLOAD" '.outcome.kind // ""')"
+  exit_code="$(_ap_scalar "$_AP_PAYLOAD" '.outcome.exit // ""')"
+  el="$(_ap_scalar "$_AP_PAYLOAD" '.elapsed_s // 0')"
+  ndone="$(_ap_scalar "$_AP_PAYLOAD" '.todo_counts.done // 0')"
+  total="$(_ap_scalar "$_AP_PAYLOAD" '.todo_counts.total // 0')"
+  tools="$(_ap_scalar "$_AP_PAYLOAD" '.counts.tools // 0')"
+  errors="$(_ap_scalar "$_AP_PAYLOAD" '.counts.errors // 0')"
+  summary="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.outcome.summary // ""')")"
+  last_error="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.last_error // ""')")"
+  dir="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.record.dir // ""')")"
+  task="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.task // ""')")"
+  case "$kind" in
+    success)   word="done";      color="$_AP_OK";   mark="$_AP_M_DONE" ;;
+    failed)    word="failed";    color="$_AP_ERR";  mark="$_AP_M_ERR" ;;
+    error)     word="failed";    color="$_AP_ERR";  mark="$_AP_M_ERR" ;;
+    cancelled) word="cancelled"; color="$_AP_WARN"; mark="$_AP_M_WARN" ;;
+    exited)    word="exited";    color="$_AP_DIM";  mark="$_AP_M_IDLE" ;;
+    *)         word="ended";     color="$_AP_WARN"; mark="$_AP_M_UNK" ;;
+  esac
+  line="$word"
+  if [[ -n "$exit_code" ]]; then
+    if [[ "$kind" == error ]]; then
+      line="$line $_AP_SEP exit $exit_code but the harness reported an error"
+    else
+      line="$line $_AP_SEP exit $exit_code"
+    fi
+  fi
+  line="$line $_AP_SEP $(_ap_duration "$el")"
+  if [[ "$total" != 0 && -n "$total" ]]; then line="$line $_AP_SEP plan $ndone/$total done"; fi
+  line="$line $_AP_SEP $(_ap_count "$tools" tool)"
+  if [[ "$errors" != 0 && -n "$errors" ]]; then line="$line, $(_ap_count "$errors" error)"; fi
+  _ap_hr
+  printf '%s%s %s%s\n' "$color" "$mark" "$line" "$_AP_RESET"
+  if [[ -n "$task" ]]; then _ap_field "task" "$(_ap_shorten "$task" $((_AP_WIDTH - 10)))"; fi
+  if [[ -n "$summary" ]]; then _ap_field "summary" "$summary"; fi
+  if [[ -n "$last_error" && "$kind" != success ]]; then
+    printf '  %serror%s   %s%s%s\n' "$_AP_DIM" "$_AP_RESET" "$_AP_ERR" "$last_error" "$_AP_RESET"
+  fi
+  if [[ -n "$dir" ]]; then _ap_field "record" "$(_ap_path "$dir")/"; fi
+  _ap_hr
   return 0
 }
 

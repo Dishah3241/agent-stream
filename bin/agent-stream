@@ -1,0 +1,402 @@
+#!/usr/bin/env bash
+# agent-stream: run a headless coding agent in a pane that explains itself,
+# and keep a complete record of the run.
+#
+#   agent-stream run [options] [-- worker argv...]
+#   agent-stream follow RECORD_DIR
+#   agent-stream state RECORD_DIR [--rebuild]
+#   agent-stream render FORMAT        < events  > activity lines
+#   agent-stream present              < activity lines
+#   agent-stream acp-bridge --task T [--cwd D] -- acp-agent argv...
+#   agent-stream help
+#
+# run options:
+#   --agent NAME     claude | pi | cursor | grok | codex | opencode | acp
+#                    picks the stream format and a default worker command;
+#                    acp needs the agent command after -- and drives it
+#                    through the built-in ACP client (see acp-bridge)
+#   --format FORMAT  claude-json | pi-json | cursor-json | grok-json | acp-json | text
+#   --task TEXT      the task, saved in full, shown shortened
+#   --task-file F    read the task from a file ("-" for stdin)
+#   --project NAME   default: git top-level directory name, else cwd name
+#   --cwd DIR        where the worker runs (default: current directory)
+#   --model NAME     passed to a default worker command; recorded as requested
+#   --dir DIR        record directory (default: $AGENT_STREAM_HOME/runs/<id>,
+#                    AGENT_STREAM_HOME defaults to ~/.agent-stream)
+#   --id ID          record id (default: UTC timestamp plus random suffix)
+#   --label TEXT     short label for the run (default: first line of the task)
+#
+# Exit status: the worker's. Bash 3.2 compatible; needs jq.
+set -u
+
+AS_SELF="${BASH_SOURCE[0]}"
+AS_ROOT="$(cd "$(dirname "$AS_SELF")/.." && pwd)"
+AS_LIB="$AS_ROOT/lib"
+
+as_die() { printf 'agent-stream: %s\n' "$*" >&2; exit 2; }
+
+as_usage() {
+  sed -n '2,/^# Exit status/p' "$AS_SELF" | sed 's/^# \{0,1\}//'
+}
+
+# One id: UTC time plus eight random hex digits, no process ids or hosts.
+as_new_id() {
+  local rnd
+  rnd="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [[ -n "$rnd" ]] || rnd="$(printf '%04x%04x' "$RANDOM" "$RANDOM")"
+  printf '%s-%s' "$(date -u +%Y%m%d-%H%M%S)" "$rnd"
+}
+
+as_format_for_agent() {
+  case "$1" in
+    claude) printf 'claude-json' ;;
+    pi) printf 'pi-json' ;;
+    cursor|cursor-agent) printf 'cursor-json' ;;
+    grok) printf 'grok-json' ;;
+    acp) printf 'acp-json' ;;
+    codex|opencode|text) printf 'text' ;;
+    *) printf '' ;;
+  esac
+}
+
+# ------------------------------------------------------------ ACP bridge --
+# agent-stream acp-bridge [--task TEXT|--task-file F] [--cwd DIR]
+#                         [--permission allow|deny] [--protocol-version N]
+#                         -- agent argv...
+#
+# A minimal Agent Client Protocol client that drives an ACP agent for one
+# prompt and relays the agent's stdout line for line, so the capture layer
+# sees the raw JSON-RPC stream and renders it with the acp-json format. It
+# sends initialize, session/new, and session/prompt, answers
+# session/request_permission (allow by default: the first allow_once or
+# allow_always option; AGENT_STREAM_ACP_PERMISSION=deny picks a reject
+# option), declines fs/terminal/elicitation requests with a JSON-RPC error
+# because it declares no such capabilities, and closes the agent's stdin
+# when the turn ends: the session/prompt response under protocol 1, the
+# idle state_update under protocol 2. An agent that does not exit within
+# AGENT_STREAM_ACP_GRACE seconds (default 10) is terminated. The bridge
+# exits with the agent's status.
+as_acp_send() { printf '%s\n' "$1" >&3; }
+
+as_acp_classify() {
+  printf '%s' "$1" | jq -r '
+    def s: if type == "string" or type == "number" then tostring else "" end;
+    if has("method") and has("id") then
+      ["request", (.id | tojson), .method,
+       ((.params.options // []) | map(((.optionId // "") | s) + "=" + ((.kind // "") | s)) | join(",")), ""]
+    elif has("method") then
+      if (.params.update.sessionUpdate // "") == "state_update" then
+        ["state", "", (.params.update.state | s), (.params.update.stopReason | s), ""]
+      else empty end
+    elif has("result") then
+      ["response", (.id | tojson), (.result.protocolVersion | s), (.result.sessionId | s), (.result.stopReason | s)]
+    elif has("error") then
+      ["error", (.id | tojson), (.error.message | s), "", ""]
+    else empty end | @tsv' 2>/dev/null
+}
+
+as_acp_pick_option() {
+  # $1 "id=kind,id=kind,..." $2 allow|deny -> option id (first matching kind, else first)
+  local opts="$1" want="$2" pair id kind first="" rest
+  rest="$opts"
+  while [[ -n "$rest" ]]; do
+    pair="${rest%%,*}"
+    if [[ "$rest" == *,* ]]; then rest="${rest#*,}"; else rest=""; fi
+    id="${pair%%=*}"; kind="${pair#*=}"
+    [[ -n "$first" ]] || first="$id"
+    case "$want:$kind" in
+      allow:allow_once|allow:allow_always|deny:reject_once|deny:reject_always) printf '%s' "$id"; return 0 ;;
+    esac
+  done
+  printf '%s' "$first"
+}
+
+as_cmd_acp_bridge() {
+  local task="" task_file="" cwd="$PWD" perm="${AGENT_STREAM_ACP_PERMISSION:-allow}"
+  local proto="${AGENT_STREAM_ACP_VERSION:-1}" grace="${AGENT_STREAM_ACP_GRACE:-10}"
+  local -a argv
+  argv=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --task) task="${2:-}"; shift 2 ;;
+      --task-file) task_file="${2:-}"; shift 2 ;;
+      --cwd) cwd="${2:-}"; shift 2 ;;
+      --permission) perm="${2:-}"; shift 2 ;;
+      --protocol-version) proto="${2:-}"; shift 2 ;;
+      --) shift; argv=("$@"); break ;;
+      *) as_die "unknown acp-bridge option: $1" ;;
+    esac
+  done
+  if [[ -n "$task_file" ]]; then
+    if [[ "$task_file" == "-" ]]; then task="$(cat)"; else task="$(cat "$task_file")" || as_die "cannot read $task_file"; fi
+  fi
+  [[ -n "$task" ]] || as_die "acp-bridge needs --task"
+  [[ "${#argv[@]}" -gt 0 ]] || as_die "acp-bridge needs the agent command after --"
+  case "$proto" in ''|*[!0-9]*) proto=1 ;; esac
+  case "$grace" in ''|*[!0-9]*) grace=10 ;; esac
+  local tmp in out agent_pid status=1 line row kind id method opts pv sid stop
+  local session="" negotiated="$proto" prompted=0 finishing=0 deadline=0 rc opt
+  tmp="$(mktemp -d)" || as_die "cannot create a temp dir"
+  in="$tmp/in.fifo"; out="$tmp/out.fifo"
+  mkfifo "$in" "$out" || as_die "cannot create fifos"
+  ( cd "$cwd" && exec "${argv[@]}" ) <"$in" >"$out" &
+  agent_pid=$!
+  exec 3>"$in" 4<"$out"
+  as_acp_send "$(jq -nc --argjson v "$proto" --arg cwd "$cwd" '
+    {jsonrpc: "2.0", id: 1, method: "initialize",
+     params: {protocolVersion: $v,
+              clientCapabilities: {fs: {readTextFile: false, writeTextFile: false}, terminal: false},
+              clientInfo: {name: "agent-stream", version: "1"},
+              capabilities: {}, info: {name: "agent-stream", version: "1"}}}')"
+  while true; do
+    rc=0
+    if (( finishing )); then
+      IFS= read -r -t 1 line <&4 || rc=$?
+      if (( rc > 128 )); then
+        if (( SECONDS >= deadline )); then
+          kill "$agent_pid" 2>/dev/null || true
+          break
+        fi
+        continue
+      fi
+    else
+      IFS= read -r line <&4 || rc=$?
+    fi
+    if (( rc != 0 )); then
+      [[ -z "$line" ]] || printf '%s\n' "$line"
+      break
+    fi
+    printf '%s\n' "$line"
+    case "$line" in *'"id"'*|*state_update*) ;; *) continue ;; esac
+    row="$(as_acp_classify "$line")"
+    [[ -n "$row" ]] || continue
+    kind="${row%%$'\t'*}"; row="${row#*$'\t'}"
+    id="${row%%$'\t'*}"; row="${row#*$'\t'}"
+    case "$kind" in
+      response)
+        pv="${row%%$'\t'*}"; row="${row#*$'\t'}"
+        sid="${row%%$'\t'*}"; row="${row#*$'\t'}"
+        stop="$row"
+        if [[ "$id" == 1 ]]; then
+          case "$pv" in ''|*[!0-9]*) ;; *) negotiated="$pv" ;; esac
+          as_acp_send "$(jq -nc --arg cwd "$cwd" '{jsonrpc: "2.0", id: 2, method: "session/new", params: {cwd: $cwd, mcpServers: []}}')"
+        elif [[ "$id" == 2 ]]; then
+          session="$sid"
+          as_acp_send "$(jq -nc --arg sid "$session" --arg task "$task" '
+            {jsonrpc: "2.0", id: 3, method: "session/prompt",
+             params: {sessionId: $sid, prompt: [{type: "text", text: $task}]}}')"
+          prompted=1
+        elif [[ "$id" == 3 ]]; then
+          if (( negotiated < 2 )) || [[ -n "$stop" ]]; then
+            finishing=1; deadline=$((SECONDS + grace)); exec 3>&-
+          fi
+        fi ;;
+      state)
+        method="${row%%$'\t'*}"; row="${row#*$'\t'}"; stop="${row%%$'\t'*}"
+        if (( prompted )) && [[ "$method" == idle && -n "$stop" ]] && (( ! finishing )); then
+          finishing=1; deadline=$((SECONDS + grace)); exec 3>&-
+        fi ;;
+      request)
+        method="${row%%$'\t'*}"; row="${row#*$'\t'}"; opts="${row%%$'\t'*}"
+        if (( finishing )); then continue; fi
+        if [[ "$method" == "session/request_permission" ]]; then
+          opt="$(as_acp_pick_option "$opts" "$perm")"
+          if [[ -z "$opt" ]]; then
+            as_acp_send "$(jq -nc --argjson id "$id" '{jsonrpc: "2.0", id: $id, result: {outcome: {outcome: "cancelled"}}}')"
+          else
+            as_acp_send "$(jq -nc --argjson id "$id" --arg opt "$opt" '{jsonrpc: "2.0", id: $id, result: {outcome: {outcome: "selected", optionId: $opt}}}')"
+          fi
+        else
+          as_acp_send "$(jq -nc --argjson id "$id" --arg m "$method" '{jsonrpc: "2.0", id: $id, error: {code: -32601, message: ("agent-stream bridge does not provide " + $m)}}')"
+        fi ;;
+      error)
+        method="${row%%$'\t'*}"
+        case "$id" in 1|2|3)
+          printf 'agent-stream: acp request %s failed: %s\n' "$id" "$method" >&2
+          finishing=1; deadline=$((SECONDS + grace)); exec 3>&- ;;
+        esac ;;
+    esac
+  done
+  exec 3>&- 2>/dev/null || true
+  exec 4<&-
+  wait "$agent_pid" 2>/dev/null; status=$?
+  rm -rf "$tmp"
+  exit "$status"
+}
+
+# as_default_argv AGENT TASK MODEL: fill AS_ARGV with the harness command
+# that produces the stream this tool expects. Only the claude command was
+# verified against a real run; the others follow each tool's documented
+# flags and are listed as assumptions in docs/design.md.
+as_default_argv() {
+  local agent="$1" task="$2" model="$3"
+  AS_ARGV=()
+  case "$agent" in
+    claude)
+      AS_ARGV=(claude -p "$task" --output-format stream-json --verbose)
+      [[ -z "$model" ]] || AS_ARGV+=(--model "$model") ;;
+    pi)
+      AS_ARGV=(pi --mode json -p "$task")
+      [[ -z "$model" ]] || AS_ARGV+=(--model "$model") ;;
+    cursor|cursor-agent)
+      AS_ARGV=(cursor-agent -p "$task" --output-format stream-json --stream-partial-output)
+      [[ -z "$model" ]] || AS_ARGV+=(--model "$model") ;;
+    grok)
+      AS_ARGV=(grok -p "$task" --output-format streaming-json)
+      [[ -z "$model" ]] || AS_ARGV+=(--model "$model") ;;
+    codex)
+      AS_ARGV=(codex exec)
+      [[ -z "$model" ]] || AS_ARGV+=(-m "$model")
+      AS_ARGV+=("$task") ;;
+    opencode)
+      AS_ARGV=(opencode run)
+      [[ -z "$model" ]] || AS_ARGV+=(--model "$model")
+      AS_ARGV+=("$task") ;;
+    *) return 1 ;;
+  esac
+}
+
+# as_acp_wrap TASK CWD argv...: run an ACP agent command through the bridge
+# so the capture layer sees its JSON-RPC stream.
+as_acp_wrap() {
+  local task="$1" cwd="$2"
+  shift 2
+  AS_ARGV=("$AS_SELF" acp-bridge --task "$task" --cwd "$cwd" -- "$@")
+}
+
+as_cmd_run() {
+  local agent="" format="" task="" task_file="" project="" cwd="" model=""
+  local dir="" id="" label="" have_argv=0 home top branch
+  AS_ARGV=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent) agent="${2:-}"; shift 2 ;;
+      --format) format="${2:-}"; shift 2 ;;
+      --task) task="${2:-}"; shift 2 ;;
+      --task-file) task_file="${2:-}"; shift 2 ;;
+      --project) project="${2:-}"; shift 2 ;;
+      --cwd) cwd="${2:-}"; shift 2 ;;
+      --model) model="${2:-}"; shift 2 ;;
+      --dir) dir="${2:-}"; shift 2 ;;
+      --id) id="${2:-}"; shift 2 ;;
+      --label) label="${2:-}"; shift 2 ;;
+      --) shift; have_argv=1; AS_ARGV=("$@"); break ;;
+      -h|--help) as_usage; return 0 ;;
+      *) as_die "unknown run option: $1 (see agent-stream help)" ;;
+    esac
+  done
+  if [[ -n "$task_file" ]]; then
+    if [[ "$task_file" == "-" ]]; then task="$(cat)"; else task="$(cat "$task_file")" || as_die "cannot read $task_file"; fi
+  fi
+  if [[ -z "$format" && -n "$agent" ]]; then format="$(as_format_for_agent "$agent")"; fi
+  [[ -n "$format" ]] || as_die "need --agent or --format"
+  if [[ -n "$cwd" ]]; then cd "$cwd" || as_die "cannot enter $cwd"; fi
+  cwd="$PWD"
+  if [[ "$agent" == acp ]]; then
+    # An ACP agent needs a client on its stdin; the bridge is that client.
+    [[ "$have_argv" == 1 ]] || as_die "--agent acp needs the agent command after -- (for example: -- claude-code-acp)"
+    [[ -n "$task" ]] || as_die "--agent acp needs --task (or --task-file)"
+    as_acp_wrap "$task" "$cwd" "${AS_ARGV[@]}"
+  elif [[ "$have_argv" == 0 ]]; then
+    [[ -n "$task" ]] || as_die "need --task (or --task-file) when no worker command is given after --"
+    as_default_argv "$agent" "$task" "$model" || as_die "no default command for agent '$agent'; pass one after --"
+  fi
+  [[ "${#AS_ARGV[@]}" -gt 0 ]] || as_die "empty worker command"
+  [[ -n "$id" ]] || id="$(as_new_id)"
+  if [[ -z "$dir" ]]; then
+    home="${AGENT_STREAM_HOME:-$HOME/.agent-stream}"
+    dir="$home/runs/$id"
+  fi
+  mkdir -p "$dir" || as_die "cannot create $dir"
+  dir="$(cd "$dir" && pwd)"
+  if [[ -z "$project" ]]; then
+    top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+    project="$(basename "${top:-$cwd}")"
+  fi
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || branch=""
+  if [[ "$branch" == HEAD ]]; then branch="detached $(git rev-parse --short HEAD 2>/dev/null)"; fi
+  if [[ -z "$label" && -n "$task" ]]; then label="${task%%$'\n'*}"; fi
+  [[ -n "$agent" ]] || agent="$(. "$AS_LIB/run-capture.sh"; run_capture_agent_for_format "$format")"
+  jq -n --arg id "$id" --arg agent "$agent" --arg label "$label" --arg cwd "$cwd" \
+        --arg dir "$dir" --arg model "$model" --arg project "$project" --arg branch "$branch" \
+        --arg task "$task" --arg format "$format" '
+    {id: $id, agent: (if $agent == "" then null else $agent end),
+     label: (if $label == "" then null else $label end),
+     cwd: $cwd, dir: $dir,
+     model_requested: (if $model == "" then null else $model end),
+     model_source: (if $model == "" then null else "agent-stream --model" end),
+     project: $project, branch: (if $branch == "" then null else $branch end),
+     task: (if $task == "" then null else $task end), format: $format,
+     created: (now | todate)}' >"$dir/header.json" || as_die "cannot write header"
+
+  (
+    set +e
+    run="$dir"
+    lib="$AS_LIB"
+    export run
+    # shellcheck source=../lib/run-capture.sh
+    . "$AS_LIB/run-capture.sh"
+    run_capture_exec "$format" -- "${AS_ARGV[@]}"
+    run_capture_write_marker "$dir/exit" "$status"
+    run_capture_write_marker "$dir/capture" "$capture"
+    exit "$status"
+  )
+}
+
+as_record_dir() {
+  local d="${1:-}"
+  [[ -n "$d" ]] || as_die "need a record directory"
+  [[ -d "$d" ]] || as_die "no such record: $d"
+  printf '%s' "$d"
+}
+
+as_cmd_follow() {
+  local dir
+  dir="$(as_record_dir "${1:-}")"
+  # shellcheck source=../lib/agent-present.sh
+  . "$AS_LIB/agent-present.sh"
+  run="$dir"
+  export run
+  if [[ -f "$dir/header.json" ]]; then agent_present_header <"$dir/header.json" || true; fi
+  if [[ -s "$dir/state.json" ]] && jq -e '.status == "ended"' "$dir/state.json" >/dev/null 2>&1; then
+    agent_present_stream <"$dir/display.txt"
+    agent_present_end <"$dir/state.json" || true
+  else
+    [[ -f "$dir/display.txt" ]] || as_die "no display.txt in $dir yet"
+    tail -n +1 -f "$dir/display.txt" | agent_present_stream
+  fi
+}
+
+as_cmd_state() {
+  local dir rebuild=0
+  dir="$(as_record_dir "${1:-}")"
+  [[ "${2:-}" != "--rebuild" ]] || rebuild=1
+  # shellcheck source=../lib/agent-state.sh
+  . "$AS_LIB/agent-state.sh"
+  if [[ "$rebuild" == 0 && -s "$dir/state.json" ]]; then
+    cat "$dir/state.json"
+  elif [[ -f "$dir/display.txt" ]]; then
+    local seed='{}'
+    if [[ -f "$dir/header.json" ]]; then
+      seed="$(run="$dir"; . "$AS_LIB/run-capture.sh"; run_capture_state_seed "$(run_capture_context text)")"
+    fi
+    agent_state_build "$seed" <"$dir/display.txt"
+  else
+    as_die "no state.json or display.txt in $dir"
+  fi
+}
+
+case "${1:-help}" in
+  run) shift; as_cmd_run "$@" ;;
+  acp-bridge) shift; as_cmd_acp_bridge "$@" ;;
+  follow) shift; as_cmd_follow "$@" ;;
+  state) shift; as_cmd_state "$@" ;;
+  render) shift
+    # shellcheck source=../lib/agent-output.sh
+    . "$AS_LIB/agent-output.sh"; agent_output_render "$@" ;;
+  present) shift
+    # shellcheck source=../lib/agent-present.sh
+    . "$AS_LIB/agent-present.sh"; agent_present_stream ;;
+  help|-h|--help) as_usage ;;
+  *) as_die "unknown command: $1 (see agent-stream help)" ;;
+esac

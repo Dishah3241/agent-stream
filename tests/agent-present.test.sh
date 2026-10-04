@@ -553,4 +553,157 @@ note_out="$(printf '%s\n' '[note] session id is already set' | AGENT_RUN_RUN=abc
 grep -q 'session id is already set' <<<"$note_out" || fail "note lines must reach the pane"
 grep -q 'agent-run abc123 streaming /tmp/rec/display.txt' <<<"$note_out" || fail "live sink must repeat the run identity"
 
+# ------------------------------------------------------- protocol v2 ----
+
+# Plan rows: one divider for a run of consecutive rows, a mark per state,
+# the position always present so nothing depends on color.
+plan_out="$(printf '%s\n' '[todo] 1/3 done Read the README' '[todo] 2/3 active Count its lines' '[todo] 3/3 pending Report the count' | agent_present_stream)"
+[[ "$plan_out" == $'── · plan\n│ ✓ 1/3 Read the README\n│ ▸ 2/3 Count its lines\n│ · 3/3 Report the count' ]] || fail "plan rows, got: $plan_out"
+drop_out="$(printf '%s\n' '[todo] 1/1 dropped Old idea' | agent_present_stream)"
+assert_has "$drop_out" "│ – 1/1 Old idea"
+split_plan="$(printf '%s\n' '[todo] 1/2 active a' 'Text between' '[todo] 2/2 pending b' | agent_present_stream)"
+[[ "$(grep -c '· plan' <<<"$split_plan")" == 2 ]] || fail "a plan row after other output gets its own divider, got: $split_plan"
+plan_ascii="$( (export TERM=dumb; printf '%s\n' '[todo] 1/2 done a' '[todo] 2/2 active b' | agent_present_stream) )"
+assert_has "$plan_ascii" "| + 1/2 a"
+assert_has "$plan_ascii" "| > 2/2 b"
+assert_lacks "$plan_ascii" "✓"
+plan_color="$(run_color "$(printf '%s\n' '[todo] 1/2 done a' '[todo] 2/2 active b')" agent_present_stream)"
+assert_styles_only "$plan_color" 0 2 32 36
+bad_plan="$(printf '%s\n' '[todo] 1/1 weird thing' | agent_present_stream)"
+assert_has "$bad_plan" "? 1/1 weird thing"
+
+# Waits carry the word "waiting" and the kind; steps read as "now".
+wait_out="$(printf '%s\n' '[wait] permission: Write notes.txt (outside the working directory)' | agent_present_stream)"
+[[ "$wait_out" == "│ ~ waiting (permission) Write notes.txt (outside the working directory)" ]] || fail "wait line, got: $wait_out"
+retry_out="$(printf '%s\n' '[wait] retry 1/3 in 2000ms: rate limited' | agent_present_stream)"
+assert_has "$retry_out" "~ waiting (retry) 1/3 in 2000ms: rate limited"
+wait_ascii="$( (export TERM=dumb; printf '[wait] compacting context (oversize)\n' | agent_present_stream) )"
+[[ "$wait_ascii" == "| ~ waiting (compacting) context (oversize)" ]] || fail "ascii wait, got: $wait_ascii"
+wait_color="$(run_color '[wait] permission: Write x' agent_present_stream)"
+assert_style "$wait_color" 33
+step_out="$(printf '[step] Counting lines with wc\n' | agent_present_stream)"
+[[ "$step_out" == "│ now Counting lines with wc" ]] || fail "step line, got: $step_out"
+
+# Run lines: identity dim, success result green, other results amber.
+run_out="$(printf '%s\n' '[run] claude claude-opus-5-5 session 3f9c2a71' '[run] result success (4210ms, 3 turns)' '[run] result error_max_turns (1ms, 9 turns)' | agent_present_stream)"
+assert_has "$run_out" "│ run claude claude-opus-5-5 session 3f9c2a71"
+assert_has "$run_out" "│ ✓ result success (4210ms, 3 turns)"
+assert_has "$run_out" "│ ! result error_max_turns (1ms, 9 turns)"
+run_color_out="$(run_color '[run] result success (1ms, 1 turns)' agent_present_stream)"
+assert_style "$run_color_out" 32
+
+# End lines in a replayed display.txt.
+end_ok="$(printf '[end] success exit 0 elapsed 12s record /r/x\n' | agent_present_stream)"
+[[ "$end_ok" == "── ✓ success exit 0 elapsed 12s record /r/x" ]] || fail "end line, got: $end_ok"
+end_bad="$(printf '[end] failed exit 3 elapsed 1s record /r/x\n' | agent_present_stream)"
+assert_has "$end_bad" "✗ failed exit 3"
+end_color="$(run_color '[end] failed exit 3 elapsed 1s record /r/x' agent_present_stream)"
+assert_style "$end_color" 31
+
+# New labels are held like the old ones: no partial "[wa" leaks, and a
+# bracket word that is not a label still passes through whole.
+mixed="$(printf '%s\n' '[wait] x' '[steps] not a label' '[running] either' | agent_present_stream)"
+assert_has "$mixed" "~ waiting (x)"
+assert_has "$mixed" "[steps] not a label"
+assert_has "$mixed" "[running] either"
+eof_label="$(printf '[todo] 1/1 active tail' | agent_present_stream)"
+assert_has "$eof_label" "▸ 1/1 tail"
+
+# Control bytes inside the new labels are stripped like everywhere else.
+evil_plan="$(printf '[todo] 1/1 active \033[2Jrm\007 -rf\n[wait] permission: \033]0;x\007Write\n' | agent_present_stream)"
+assert_no_ansi "$evil_plan"
+assert_has "$evil_plan" "rm -rf"
+assert_has "$evil_plan" "Write"
+
+# ---------------------------------------------------- context header ----
+
+ctx_json='{"id":"20261004-050000-ab12cd34","agent":"claude","project":"agent-stream","branch":"main",
+  "task":"Rethink and rebuild how this repository shows a headless coding agent at work in a terminal pane.\nSecond paragraph.",
+  "cwd":"/home/me/Code/agent-stream","dir":"/home/me/.agent-stream/runs/20261004-050000-ab12cd34","model_requested":null}'
+ctx="$(printf '%s\n' "$ctx_json" | agent_present_header)"
+assert_no_ansi "$ctx"
+assert_has "$ctx" "▸ agent-stream · main"
+assert_has "$ctx" "task    Rethink and rebuild how this repository shows a headless coding agent…"
+assert_lacks "$ctx" "Second paragraph"
+assert_lacks "$ctx" "terminal pane."
+assert_has "$ctx" "run     20261004-050000-ab12cd34 · claude"
+assert_has "$ctx" "requested: none"
+ctx_wide="$(COLUMNS=120 agent_present_header <<<"$ctx_json")"
+assert_has "$ctx_wide" "at work in a terminal pane. Second"
+ctx_label="$(printf '%s\n' '{"id":"x1","agent":"pi","label":"Only a label","project":"demo","cwd":"/t","dir":"/t"}' | agent_present_header)"
+assert_has "$ctx_label" "▸ demo"
+assert_has "$ctx_label" "task    Only a label"
+ctx_evil="$(printf '%s\n' '{"id":"x1","agent":"pi","project":"p\u001b[2J","branch":"b\u0007","task":"t\rx","cwd":"/t","dir":"/t"}' | agent_present_header)"
+assert_no_ansi "$ctx_evil"
+assert_has "$ctx_evil" "▸ p · b"
+ctx_color="$(run_color "$ctx_json" agent_present_header)"
+assert_styles_only "$ctx_color" 0 2 36
+
+# ------------------------------------------------------- ending card ----
+
+end_json() {
+  printf '%s\n' '{"outcome":{"kind":"'"$1"'","exit":'"$2"',"summary":'"$3"'},"elapsed_s":'"$4"',
+    "todo_counts":{"done":3,"total":3},"counts":{"tools":12,"errors":'"$5"'},
+    "last_error":"Bash: make: *** [test] Error 1","task":"Count the lines",
+    "record":{"dir":"'"$HOME"'/.agent-stream/runs/20261004-050000-ab12cd34"}}'
+}
+end_done="$(end_json success 0 '"README.md: 3 lines"' 252 1 | agent_present_end)"
+assert_no_ansi "$end_done"
+assert_has "$end_done" "✓ done · exit 0 · 4m12s · plan 3/3 done · 12 tools, 1 error"
+assert_has "$end_done" "summary README.md: 3 lines"
+assert_has "$end_done" "task    Count the lines"
+assert_has "$end_done" "record  ~/.agent-stream/runs/20261004-050000-ab12cd34/"
+assert_lacks "$end_done" "Error 1"
+assert_lacks "$end_done" "accepted"
+rule_first="$(printf '%s' "$end_done" | head -n 1)"
+case "$rule_first" in *"─"*) ;; *) fail "ending must open with a horizontal rule" ;; esac
+end_failed="$(end_json failed 3 null 42 2 | agent_present_end)"
+assert_has "$end_failed" "✗ failed · exit 3 · 42s · plan 3/3 done · 12 tools, 2 errors"
+assert_has "$end_failed" "error   Bash: make: *** [test] Error 1"
+assert_lacks "$end_failed" "summary"
+end_error="$(end_json error 0 null 3700 0 | agent_present_end)"
+assert_has "$end_error" "✗ failed · exit 0 but the harness reported an error · 1h01m"
+end_cancel="$(end_json cancelled 0 null 5 0 | agent_present_end)"
+assert_has "$end_cancel" "! cancelled · exit 0"
+end_exited="$(end_json exited 0 null 5 0 | agent_present_end)"
+assert_has "$end_exited" "· exited · exit 0"
+end_min="$(printf '%s\n' '{"status":"ended"}' | agent_present_end)"
+assert_has "$end_min" "? ended"
+end_colors="$(run_color "$(end_json success 0 null 1 0)" agent_present_end)"
+assert_styles_only "$end_colors" 0 2 32
+assert_style "$end_colors" 32
+end_fail_colors="$(run_color "$(end_json failed 1 null 1 1)" agent_present_end)"
+assert_style "$end_fail_colors" 31
+end_evil="$(printf '%s\n' '{"outcome":{"kind":"success","exit":0,"summary":"ok \u001b[31mred"},"record":{"dir":"/r\u0007"}}' | agent_present_end)"
+assert_no_ansi "$end_evil"
+assert_has "$end_evil" "summary ok red"
+end_multi_rc=0
+printf '%s' '{"outcome":{}}{"outcome":{}}' | agent_present_end >/dev/null 2>&1 || end_multi_rc=$?
+[[ "$end_multi_rc" -ne 0 ]] || fail "end must reject multiple JSON documents"
+
+# ------------------------------------------------------- status card ----
+
+SR="$TMP/staterec"
+mkdir -p "$SR"
+printf '%s\n' '{"status":"running","started_at":"2020-01-01T00:00:00Z","project":{"name":"demo","branch":"main"},
+  "todo_counts":{"done":1,"total":3},"todos":[{"n":2,"text":"Count its lines","status":"active"}],
+  "activity":{"kind":"tool","text":"Bash make test"},"counts":{"tools":12,"errors":1},"waiting":null,"step":null}' >"$SR/state.json"
+many="$(for i in $(seq 1 41); do printf 'line %s\n' "$i"; done | run="$SR" agent_present_stream)"
+card="$(grep '· plan 1/3' <<<"$many" || true)"
+[[ -n "$card" ]] || fail "a status card must appear every 40 lines when a record is set: $(tail -n 3 <<<"$many")"
+case "$card" in "── "*"demo main · plan 1/3: Count its lines · now Bash make test · 12 tools, 1 error"*) ;; *) fail "status card content, got: $card" ;; esac
+[[ "$(grep -c '· plan 1/3' <<<"$many")" == 1 ]] || fail "exactly one card in 41 lines"
+assert_lacks "$(head -n 2 <<<"$many")" "plan 1/3"
+printf '%s\n' '{"status":"waiting","started_at":"2020-01-01T00:00:00Z","waiting":{"kind":"permission","text":"Write x"},"counts":{"tools":1,"errors":0},"todo_counts":{"done":0,"total":0}}' >"$SR/state.json"
+waiting_many="$(for i in $(seq 1 41); do printf 'line %s\n' "$i"; done | run="$SR" agent_present_stream)"
+assert_has "$waiting_many" "waiting permission Write x · 1 tool"
+no_state="$(for i in $(seq 1 41); do printf 'line %s\n' "$i"; done | run="$TMP/nowhere" agent_present_stream)"
+assert_lacks "$no_state" "── "
+[[ "$(wc -l <<<"$no_state" | tr -d ' ')" == 41 ]] || fail "no state file means no card and no extra lines"
+
+# Pinned mode never emits controls when stdout is not a terminal.
+pinned_pipe="$( (export AGENT_RUN_STATUS=pinned; printf '%s\n' '[tool] read a' '[done] read' | run="$SR" agent_present_stream) )"
+assert_no_ansi "$pinned_pipe"
+assert_has "$pinned_pipe" "✓ read"
+
 echo "agent-present tests: all passed"

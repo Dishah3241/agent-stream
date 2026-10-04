@@ -94,6 +94,47 @@ tool whose name contains `todo`, `plan`, or `task` and whose arguments carry a
 tool; when the heuristic does not match, the pane shows no plan and says
 nothing false.
 
+### 3.1 Agent Client Protocol (ACP), protocol 1 and the v2 schema
+
+Added on request: the pane must work with ACP agents in the owner's final
+setup. The protocol site is blocked from this environment, so the shapes
+come from the published `@agentclientprotocol/sdk` 1.7.0 package on the npm
+registry, which ships `schema/schema.json` (protocol 1) and
+`schema/v2/schema.unstable.json` (the v2 draft). Both were read in full. No
+ACP agent was run here; the bridge and renderer were exercised against fake
+agents that speak those shapes.
+
+Framing is the same in both: newline-delimited JSON-RPC 2.0 on the agent's
+stdout. `session/update` params carry `sessionId` and `update`, with
+`update.sessionUpdate` naming the kind:
+
+| Kind | Protocol | Rendered as |
+|---|---|---|
+| `agent_message_chunk` / `agent_message` | 1 / 2 | assistant text (chunks join; a whole message after chunks is not repeated) |
+| `agent_thought_chunk` / `agent_thought` | 1 / 2 | `[think]` then the text |
+| `tool_call` / `tool_call_update` | 1 / 2 (v2 has no separate start: the first update for a `toolCallId` is the start) | `[tool] title`, then `[done]`, `[error] title: detail`, or `[error] title: cancelled` by `status` |
+| `plan {entries}` / `plan_update {plan: {type: items, entries}}` | 1 / 2 | `[todo]` lines; `plan_removed` clears the plan; markdown and file plans become a `[note]` |
+| `state_update {state}` | 2 | `requires_action` is `[wait] input: …`; `idle` with `stopReason` is `[run] result STOP` |
+| `notice {severity, title, description}` | 2 | `[note]`, `[warn]`, or `[error]` |
+| `compaction_update {status}` | 2 | `[wait] compacting context`, then `[note] context compacted` or `[error]` |
+| `subagent_update` | 2 | `[note] subagent STATE: title` |
+| `user_message*`, `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `usage_update`, `tool_call_content_chunk`, `terminal_*`, `compaction_summary_chunk`, `session_message*` | both | quiet |
+
+Requests from the agent: `session/request_permission` with `toolCall.title`
+(1) or `title` / `description` / `subject` (2) and `options[]` of
+`{optionId, name, kind}` becomes `[wait] permission: title (description)`.
+Responses carry no method, so the renderer remembers the client's requests
+when a dispatcher logs both directions and otherwise recognises
+`initialize` by `protocolVersion` (`[note] acp agent NAME VERSION (protocol
+N)`), `session/new` by `sessionId` (`[run] acp NAME session ID`), and a
+protocol 1 `session/prompt` by `stopReason`. A v2 prompt response carries only
+`messageId`; the stop reason arrives in the idle `state_update`.
+
+Grok's `streaming-json` is visibly an ACP mirror (`tool_call` with
+`toolCallId`, `title`, `rawInput`, `status`; `tool_call_update`;
+`available_commands`), so its adapter also accepts a `plan` event with
+`entries`. **Assumption**: not observed.
+
 ## 4. Options considered
 
 ### 4.1 Scrolling stream or pinned status region
@@ -158,7 +199,28 @@ ending. Per-agent default invocations are provided so `agent-stream run
 the claude default was verified here; the others are **assumptions** from
 each tool's documented flags.
 
-### 4.5 Language
+### 4.5 Driving an ACP agent
+
+An ACP agent needs a client on its stdin; capturing its stdout alone shows
+nothing because nobody sends `session/prompt`. Options: leave driving to the
+dispatcher and only render the logged stream, or ship a minimal client.
+**Decision**: both. The renderer works on any logged ACP stream, and
+`agent-stream acp-bridge` is a minimal client that wraps the agent as the
+worker: it sends `initialize` (offering protocol 1 by default,
+`AGENT_STREAM_ACP_VERSION=2` to offer v2, and accepting whatever the agent
+answers), `session/new` with the cwd, and `session/prompt` with the task;
+answers `session/request_permission` with the first `allow_once` or
+`allow_always` option (or a reject option under
+`AGENT_STREAM_ACP_PERMISSION=deny`); declines `fs/*`, `terminal/*`, and
+elicitation requests with a JSON-RPC error because it declares no such
+capabilities; closes the agent's stdin when the turn ends (the prompt
+response under protocol 1, the idle `state_update` under v2); and
+terminates an agent that ignores EOF after a grace period. It relays every
+stdout line unchanged, so `events.jsonl` is the agent's raw JSON-RPC and the
+`acp-json` renderer sees exactly what the agent said. The dispatcher can keep
+its own client and still use the renderer and the state tracker.
+
+### 4.6 Language
 
 Bash 3.2 plus jq stays. The state machine lives in jq, where the renderer's
 state machine already lives, so there are still two languages, not three. A
@@ -375,7 +437,30 @@ None of these require a caller change. Migration for callers that want the
 new context: add `task`, `project`, `branch` to `header.json`, or call
 `bin/agent-stream run` and let it build the header.
 
-## 10. Open questions for the owner
+## 10. What was verified, and how
+
+- `for t in tests/*.test.sh; do bash "$t"; done`: six test files, all
+  passing on Linux with Bash 5.2 and jq 1.7. `bash -n` and `shellcheck -S
+  error` over `lib/`, `bin/`, `tests/`. The preview script renders with
+  `AGENT_RUN_COLOR=never` and with `TERM=dumb`.
+- A real `claude -p … --output-format stream-json --verbose` run through
+  `bin/agent-stream run`: the plan from TaskCreate / TaskUpdate, a denied
+  shell redirection, the agent's own summary, and the ending card all
+  appeared; the record held every file with every marker at 0; the
+  `state.json` matched the pane. Its output is in the README and the pull
+  request.
+- Real captures (not committed) of TaskCreate / TaskUpdate / TaskList, a
+  stdio `control_request` permission prompt, a subagent run, and the
+  `task_summary` / `post_turn_summary` events; the fixtures in the tests are
+  scrubbed copies of those shapes.
+- The pinned footer under a pseudo-terminal (`script`): the scroll region is
+  set, the footer redraws, and the region is restored on exit.
+
+Not verified here: Bash 3.2 itself (no binary could be fetched; CI covers
+it on macOS), Pi, Cursor, Grok, Codex, and OpenCode streams, any real ACP
+agent, and the pinned footer in a real multiplexer.
+
+## 11. Open questions for the owner
 
 - Should the dispatcher adopt `bin/agent-stream run` or keep calling
   `run_capture_exec` with its own header?
@@ -386,3 +471,7 @@ new context: add `task`, `project`, `branch` to `header.json`, or call
 - Should the periodic status card also be written to `display.txt`? It was
   kept terminal-only so the file stays a faithful log of the agent's own
   activity.
+- ACP: does the final setup drive agents itself (then only `acp-json` and
+  the state tracker matter) or should `acp-bridge` be the client? Which
+  protocol version do the agents in that setup answer `initialize` with,
+  and should the default permission policy be `allow`?
