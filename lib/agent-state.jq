@@ -28,7 +28,7 @@ def init_state($seed):
     todos: [],
     todo_counts: {total: 0, done: 0, active: 0, pending: 0, dropped: 0},
     counts: {tools: 0, tool_errors: 0, errors: 0, warnings: 0, notes: 0,
-             waits: 0, text_lines: 0, todo_updates: 0, turns: null},
+             waits: 0, text_lines: 0, todo_updates: 0, turns: null, tokens: null},
     last_text: null, last_error: null, last_warning: null,
     result: null,
     outcome: null,
@@ -97,6 +97,8 @@ def apply_run($rest):
                         elif ($m.sub | test("cancel|abort|interrupt")) then "cancelled"
                         else "error" end)}
     | (if ($m.turns // "?") != "?" then .counts.turns = ($m.turns | tonumber) else . end)
+    | (($r | capture("[(, ](?<tok>[0-9]+) tokens[,)]") // {}).tok // null) as $tok
+    | (if $tok != null then .counts.tokens = ($tok | tonumber) else . end)
     | (if .status != "ended" then .status = "ended" | .ended_at = now_iso end)
     | .waiting = null
     | activity("done"; "result \($m.sub)")

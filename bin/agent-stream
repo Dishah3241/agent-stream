@@ -64,18 +64,22 @@ as_format_for_agent() {
 #                         [--permission allow|deny] [--protocol-version N]
 #                         -- agent argv...
 #
-# A minimal Agent Client Protocol client that drives an ACP agent for one
-# prompt and relays the agent's stdout line for line, so the capture layer
-# sees the raw JSON-RPC stream and renders it with the acp-json format. It
-# sends initialize, session/new, and session/prompt, answers
-# session/request_permission (allow by default: the first allow_once or
-# allow_always option; AGENT_STREAM_ACP_PERMISSION=deny picks a reject
-# option), declines fs/terminal/elicitation requests with a JSON-RPC error
-# because it declares no such capabilities, and closes the agent's stdin
-# when the turn ends: the session/prompt response under protocol 1, the
-# idle state_update under protocol 2. An agent that does not exit within
-# AGENT_STREAM_ACP_GRACE seconds (default 10) is terminated. The bridge
-# exits with the agent's status.
+# A minimal Agent Client Protocol client built on protocol 2: it offers
+# protocolVersion 2 in initialize (AGENT_STREAM_ACP_VERSION or
+# --protocol-version picks another) and speaks whatever version the agent
+# answers, so a protocol 1 agent still works. It relays the agent's stdout
+# line for line, so the capture layer sees the raw JSON-RPC stream and
+# renders it with the acp-json format. It sends initialize, session/new,
+# and session/prompt, answers session/request_permission (allow by default:
+# the first allow_once or allow_always option; AGENT_STREAM_ACP_PERMISSION=deny
+# picks a reject option), declines fs/terminal/elicitation requests with a
+# JSON-RPC error because it declares no such capabilities, and closes the
+# agent's stdin when the turn ends: under protocol 2 the idle state_update
+# that carries a stopReason, or any idle after the turn was seen running
+# (the schema lets stopReason be null); under protocol 1 the session/prompt
+# response. An agent that does not exit within AGENT_STREAM_ACP_GRACE
+# seconds (default 10) is terminated. The bridge exits with the agent's
+# status.
 as_acp_send() { printf '%s\n' "$1" >&3; }
 
 as_acp_classify() {
@@ -113,7 +117,7 @@ as_acp_pick_option() {
 
 as_cmd_acp_bridge() {
   local task="" task_file="" cwd="$PWD" perm="${AGENT_STREAM_ACP_PERMISSION:-allow}"
-  local proto="${AGENT_STREAM_ACP_VERSION:-1}" grace="${AGENT_STREAM_ACP_GRACE:-10}"
+  local proto="${AGENT_STREAM_ACP_VERSION:-2}" grace="${AGENT_STREAM_ACP_GRACE:-10}"
   local -a argv
   argv=()
   while [[ $# -gt 0 ]]; do
@@ -132,10 +136,10 @@ as_cmd_acp_bridge() {
   fi
   [[ -n "$task" ]] || as_die "acp-bridge needs --task"
   [[ "${#argv[@]}" -gt 0 ]] || as_die "acp-bridge needs the agent command after --"
-  case "$proto" in ''|*[!0-9]*) proto=1 ;; esac
+  case "$proto" in ''|*[!0-9]*) proto=2 ;; esac
   case "$grace" in ''|*[!0-9]*) grace=10 ;; esac
   local tmp in out agent_pid status=1 line row kind id method opts pv sid stop
-  local session="" negotiated="$proto" prompted=0 finishing=0 deadline=0 rc opt
+  local session="" negotiated="$proto" prompted=0 ran=0 finishing=0 deadline=0 rc opt
   tmp="$(mktemp -d)" || as_die "cannot create a temp dir"
   in="$tmp/in.fifo"; out="$tmp/out.fifo"
   mkfifo "$in" "$out" || as_die "cannot create fifos"
@@ -204,7 +208,8 @@ as_cmd_acp_bridge() {
         fi ;;
       state)
         method="${row%%$'\t'*}"; row="${row#*$'\t'}"; stop="${row%%$'\t'*}"
-        if (( prompted )) && [[ "$method" == idle && -n "$stop" ]] && (( ! finishing )); then
+        if (( prompted )) && [[ "$method" == running ]]; then ran=1; fi
+        if (( prompted && ! finishing )) && [[ "$method" == idle ]] && { [[ -n "$stop" ]] || (( ran )); }; then
           finishing=1; deadline=$((SECONDS + grace)); exec 3>&-
         fi ;;
       request)

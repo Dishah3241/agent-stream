@@ -44,13 +44,17 @@
 #           signature, available_commands, and whole tool content/rawOutput.
 #
 #   acp     Agent Client Protocol agents (newline-delimited JSON-RPC on the
-#           agent's stdout, protocol 1 and the v2 schema). Shapes come from
-#           the published @agentclientprotocol/sdk JSON schemas, read in
-#           full; no ACP agent was run here. session/update notifications,
-#           session/request_permission requests, and the responses to
-#           initialize / session/new / session/prompt are rendered; the
-#           bridge in bin/agent-stream drives an agent through those
-#           three requests and answers permission requests.
+#           agent's stdout). Protocol 2 is the primary target and the
+#           version the bridge offers; protocol 1 is still rendered. Shapes
+#           come from the published @agentclientprotocol/sdk 1.7.0 JSON
+#           schemas (v2 and 1), read in full; no real ACP agent was run
+#           here, so every shape is from the schema, none observed.
+#           session/update notifications, session/request_permission
+#           requests, and the responses to initialize / session/new /
+#           session/prompt are rendered; a v2 idle state_update with usage
+#           adds "(N tokens)" to the result line. The bridge in
+#           bin/agent-stream drives an agent through those three requests
+#           and answers permission requests.
 #
 #   claude  Claude Code 2.1 adds (observed in real runs here): TaskCreate /
 #           TaskUpdate / TaskList as the plan tools (TodoWrite is gone from

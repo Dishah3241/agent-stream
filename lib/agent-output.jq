@@ -663,27 +663,35 @@ def grok_event($ev):
 
 # --------------------------------------------------------------------- acp --
 # Agent Client Protocol: newline-delimited JSON-RPC 2.0 on the agent's
-# stdout. Shapes come from the published @agentclientprotocol/sdk schemas
-# (schema/schema.json for protocol 1, schema/v2/schema.unstable.json for
-# protocol 2); both are handled by the same code because they differ in
-# kinds, not in framing:
+# stdout. Protocol 2 is the primary target (the bridge offers it by
+# default); protocol 1 is still handled for agents that answer initialize
+# with 1. Shapes come from the published @agentclientprotocol/sdk 1.7.0
+# schemas (schema/v2/schema.unstable.json for protocol 2, schema/schema.json
+# for protocol 1), read in full; no real ACP agent was run here. Both are
+# handled by the same code because they differ in kinds, not in framing:
 #
 #   notification  {"method":"session/update","params":{"sessionId","update":{"sessionUpdate":KIND,...}}}
-#     v1 kinds    agent_message_chunk, agent_thought_chunk, tool_call,
-#                 tool_call_update, plan {entries}, user_message_chunk,
-#                 available_commands_update, current_mode_update
-#     v2 kinds    agent_message, agent_thought, state_update
-#                 {state: running|idle|requires_action, stopReason?},
-#                 plan_update {plan:{type:items,entries}|{type:markdown}|{type:file}},
-#                 plan_removed, notice {severity,title,description},
-#                 compaction_update {status,summary,error}, subagent_update,
-#                 usage_update, session_info_update, terminal_*, session_message*
+#     v2 kinds    agent_message_chunk, agent_message {messageId, content[]},
+#                 agent_thought_chunk, agent_thought, tool_call_update (no
+#                 separate tool_call: the first update for an id is the start),
+#                 state_update {state: running|idle|requires_action|unknown,
+#                 idle: stopReason?, usage? {totalTokens,inputTokens,outputTokens}},
+#                 plan_update {plan:{type:items,planId,entries}|{type:markdown,content}|{type:file,uri}},
+#                 plan_removed {planId}, notice {severity, title},
+#                 compaction_update {compactionId,status,summary[],error},
+#                 subagent_update {sessionId, title, state: StateUpdate object},
+#                 usage_update {used,size,cost}, session_info_update,
+#                 terminal_*, session_message*, user_message*
+#     v1 kinds    tool_call, plan {entries}, current_mode_update
 #   request       {"id":N,"method":"session/request_permission","params":{...}}
-#                 v1 params.toolCall.title, v2 params.title / description
+#                 v2 params.title plus subject {type:tool_call, toolCall} or
+#                 {type:command, command, cwd}; v1 params.toolCall.title.
+#                 A description field is not in either schema but is shown
+#                 when present.
 #   response      {"id":N,"result":{...}}: initialize {protocolVersion,
-#                 agentInfo|info}, session/new {sessionId}, session/prompt
-#                 {stopReason} (v1) or {messageId} (v2, the stop reason
-#                 then arrives in the idle state_update)
+#                 info (v2) | agentInfo (v1)}, session/new {sessionId},
+#                 session/prompt {messageId} (v2: the stop reason then
+#                 arrives in the idle state_update) or {stopReason} (v1)
 #
 # Responses carry no method, so the client's own requests are remembered
 # when they are in the stream (a dispatcher that logs both directions) and
@@ -770,7 +778,11 @@ def acp_update($u):
       ($u.state // "") as $s
       | if $s == "requires_action" then emit("[wait] input: the agent needs your action")
         elif $s == "idle" and ($u.stopReason | type) == "string" then
-          emit("[run] result \(safe_brief($u.stopReason; 40))")
+          # v2 idle carries the turn's usage; the token total rides on the
+          # result line so the state tracker can count it.
+          (($u.usage // {}).totalTokens // null) as $tok
+          | emit("[run] result \(safe_brief($u.stopReason; 40))"
+                 + (if ($tok | type) == "number" and $tok >= 0 then " (\($tok | floor) tokens)" else "" end))
         else . end
     elif $k == "notice" then
       (safe_brief($u.title // ""; 80)) as $title
@@ -788,7 +800,10 @@ def acp_update($u):
         elif $s == "cancelled" then emit("[note] compaction cancelled")
         else . end
     elif $k == "subagent_update" then
-      emit("[note] subagent \(safe_brief($u.state // "update"; 20)): \(safe_brief($u.title // $u.description // ""; 80))")
+      # v2 state is a StateUpdate object ({state: running|idle|...}); a bare
+      # string is accepted too.
+      (if ($u.state | type) == "object" then $u.state.state else $u.state end) as $st
+      | emit("[note] subagent \(safe_brief($st // "update"; 20)): \(safe_brief($u.title // $u.description // ""; 80))")
     elif (acp_quiet_updates | index($k)) then .
     else emit("[note] unhandled acp update: \(safe_brief($k; 40))")
     end;
@@ -803,10 +818,12 @@ def acp_event($ev):
       acp_update(if ($ev.params.update | type) == "object" then $ev.params.update else {} end)
     elif $m == "session/request_permission" then
       ($ev.params // {}) as $p
-      | (safe_brief($p.title // $p.toolCall.title // ""; 80)) as $title
-      | (safe_brief($p.description // ""; 100)) as $desc
+      | (if ($p.subject | type) == "object" then $p.subject else {} end) as $subj
+      | ($p.toolCall // $subj.toolCall // {}) as $tc
+      | ([$p.title, $tc.title] | map(safe_brief(.; 80)) | map(select(. != "")) | .[0] // "") as $title
+      | (safe_brief($p.description // (if ($subj.type // "") == "command" then $subj.command else null end) // ""; 100)) as $desc
       | (if $title != "" then $title
-         else "\(safe_brief($p.toolCall.name // $p.subject.type // "request"; 40)) \(tool_args($p.toolCall.rawInput // {}))" end) as $what
+         else "\(safe_brief($tc.name // $tc.kind // $subj.type // "request"; 40)) \(tool_args($tc.rawInput // {}))" end) as $what
       | emit("[wait] permission: \($what)" + (if $desc == "" then "" else " (\($desc))" end))
     elif $m == "session/cancel" then
       emit("[note] cancel requested")
