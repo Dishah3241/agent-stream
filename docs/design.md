@@ -437,6 +437,53 @@ None of these require a caller change. Migration for callers that want the
 new context: add `task`, `project`, `branch` to `header.json`, or call
 `bin/agent-stream run` and let it build the header.
 
+## 9.1 The watcher: a lightweight TUI on the record
+
+Added on request, after the pane shipped. The owner runs several agents at
+once and asked whether Charm's stack could "truly elevate" the output. The
+decision in section 4.1 stands for the pane itself: a Bash presenter that
+writes plain text is what every multiplexer pane, `tail -f`, and the
+dispatcher can consume. What Bash cannot do well is the thing a watcher of
+many panes wants: one screen that shows every run's project, step, plan
+progress, and waiting state, and a scrollable view of any run with the
+context pinned and real scrollback. That is a job for a TUI runtime.
+
+**Decision**: `cmd/agent-stream-watch`, a single static Go binary built on
+Bubble Tea (event loop), Bubbles (viewport), Lip Gloss (styles), and
+Glamour (markdown for completed answers). It is optional: the libraries,
+the pane, and the record are unchanged, and `agent-stream watch` falls back
+to a clear message when the binary is not built. The binary reads only the
+record files, so it is lightweight by construction: no daemon, no socket,
+no event parsing. Each second it stats the run directories, re-reads the
+`state.json` files that changed, and tails `display.txt` of the open run
+from the last offset.
+
+Two views:
+
+- **Fleet**: one row per run under the record roots (default
+  `$AGENT_STREAM_HOME/runs`, more roots as arguments), open runs first,
+  then the most recently ended. Columns: state mark, project and branch,
+  agent and model, plan `done/total`, what it is doing or waiting for,
+  elapsed, outcome. Keys: `j`/`k` or arrows move, `enter` opens, `a`
+  toggles ended runs, `r` refreshes now, `q` quits.
+- **Run**: a pinned header (project, branch, task shortened, agent, model,
+  elapsed, plan progress), the display rendered with the same marks and
+  semantics as the Bash presenter (cards, plan rows, waits, ending), a
+  pinned footer with the current activity or wait and the record path.
+  The viewport follows the tail while it is at the bottom and stops
+  following when the reader scrolls up. `p` toggles a plan panel, `m`
+  toggles Glamour rendering of completed prose paragraphs, `esc` returns to
+  the fleet.
+
+When stdout is not a terminal the binary prints the fleet table once and
+exits, so the same command works in scripts and in a pane that is not
+interactive. Colors are adaptive to light and dark terminals and honour
+`NO_COLOR`.
+
+What it does not do, on purpose: it never writes to a record, never drives
+an agent, and never replaces the pane. The pane remains the record of what
+the agent did; the watcher is a window onto several records at once.
+
 ## 10. What was verified, and how
 
 - `for t in tests/*.test.sh; do bash "$t"; done`: six test files, all
