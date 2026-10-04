@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -30,16 +30,17 @@ All tests pass.
 [end] success exit 0 elapsed 75s record /r/ok
 `
 
-func key(s string) tea.KeyMsg {
+func key(s string) tea.KeyPressMsg {
 	switch s {
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
+		return tea.KeyPressMsg{Code: tea.KeyDown}
 	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	r := []rune(s)
+	return tea.KeyPressMsg{Code: r[0], Text: s}
 }
 
 func fixtureRoot(t *testing.T, now time.Time) string {
@@ -74,7 +75,7 @@ func TestFleetView(t *testing.T) {
 	root := fixtureRoot(t, now)
 	m := newModel([]string{root}, false, func() time.Time { return now })
 	send(m, tea.WindowSizeMsg{Width: 120, Height: 20})
-	v := m.View()
+	v := plain(m.render())
 	checkFits(t, v, 120, 20)
 	for _, want := range []string{"1 open", "2 ended", "STATE", "PROJECT", "AGENT", "NOW",
 		"▸ ▸ running", "proj · main", "1/2", "quiet 10m00s · running Run tests",
@@ -100,7 +101,7 @@ func TestFleetNarrowDropsAgentColumn(t *testing.T) {
 	now := time.Date(2026, 10, 4, 10, 3, 12, 0, time.UTC)
 	m := newModel([]string{fixtureRoot(t, now)}, false, func() time.Time { return now })
 	send(m, tea.WindowSizeMsg{Width: 70, Height: 12})
-	v := m.View()
+	v := plain(m.render())
 	checkFits(t, v, 70, 12)
 	if strings.Contains(v, "AGENT") {
 		t.Error("a narrow terminal drops the agent column")
@@ -115,7 +116,7 @@ func TestRunViewOpensFollowsAndReturns(t *testing.T) {
 	if m.mode != runMode || m.dir != filepath.Join(root, "ok") {
 		t.Fatalf("enter opens the selected run: mode %v dir %q", m.mode, m.dir)
 	}
-	v := m.View()
+	v := plain(m.render())
 	checkFits(t, v, 100, 30)
 	for _, want := range []string{"✓ proj · main", "acp demo · 1m15s", "plan 3/3 done · 3 tools · 12.4k tokens",
 		"┌─ · Read calc.py", "└─ ✓ Read calc.py", "~ waiting (permission) Run python3 tests.py",
@@ -141,7 +142,7 @@ func TestRunViewTailsAppendsAndStopsFollowingWhenScrolled(t *testing.T) {
 	m := newModel([]string{root}, false, func() time.Time { return now })
 	send(m, tea.WindowSizeMsg{Width: 80, Height: 16})
 	m.openRun(dir)
-	v := m.View()
+	v := plain(m.render())
 	checkFits(t, v, 80, 16)
 	for _, want := range []string{"▸ proj · main", "task  Refactor calc.py", "✓ 1/2 Read", "▸ 2/2 Run the tests", "┌─ · Run tests"} {
 		if !strings.Contains(v, want) {
@@ -163,8 +164,8 @@ func TestRunViewTailsAppendsAndStopsFollowingWhenScrolled(t *testing.T) {
 	b.WriteString("streaming ha")
 	appendTo(b.String())
 	send(m, tickMsg(now))
-	if !m.vp.AtBottom() || !strings.Contains(m.View(), "streaming ha") {
-		t.Errorf("the view follows the tail and shows the unfinished line:\n%s", m.View())
+	if !m.vp.AtBottom() || !strings.Contains(plain(m.render()), "streaming ha") {
+		t.Errorf("the view follows the tail and shows the unfinished line:\n%s", plain(m.render()))
 	}
 	send(m, key("k"), key("k"))
 	if m.vp.AtBottom() {
@@ -175,15 +176,15 @@ func TestRunViewTailsAppendsAndStopsFollowingWhenScrolled(t *testing.T) {
 	if m.vp.AtBottom() {
 		t.Error("new lines do not pull a reader who scrolled up back to the bottom")
 	}
-	if !strings.Contains(m.View(), "G follows") {
+	if !strings.Contains(plain(m.render()), "G follows") {
 		t.Error("the footer says how to follow again")
 	}
 	send(m, key("G"))
-	if !m.vp.AtBottom() || !strings.Contains(m.View(), "more") {
+	if !m.vp.AtBottom() || !strings.Contains(plain(m.render()), "more") {
 		t.Error("G returns to the tail")
 	}
 	send(m, key("p"))
-	if strings.Contains(m.View(), "▸ 2/2 Run the tests") {
+	if strings.Contains(plain(m.render()), "▸ 2/2 Run the tests") {
 		t.Error("p hides the plan panel")
 	}
 }
@@ -195,11 +196,11 @@ func TestRunViewMarkdownToggle(t *testing.T) {
 	m := newModel([]string{root}, false, func() time.Time { return now })
 	send(m, tea.WindowSizeMsg{Width: 80, Height: 20})
 	m.openRun(dir)
-	if !strings.Contains(m.View(), "**bold**") {
+	if !strings.Contains(plain(m.render()), "**bold**") {
 		t.Fatal("plain mode shows the prose as written")
 	}
 	send(m, key("m"))
-	v := m.View()
+	v := plain(m.render())
 	if strings.Contains(v, "**bold**") || !strings.Contains(v, "bold") || !strings.Contains(v, "┌─ · Read x") {
 		t.Errorf("m renders finished prose as markdown and keeps the cards:\n%s", v)
 	}
@@ -220,7 +221,7 @@ func TestRunViewMarkdownShowsStreamingProse(t *testing.T) {
 	f.WriteString("Here is the **answer**.\n\n- first\n- second\n")
 	f.Close()
 	send(m, tickMsg(now))
-	v := m.View()
+	v := plain(m.render())
 	if !strings.Contains(v, "answer") || strings.Contains(v, "**answer**") || !strings.Contains(v, "second") {
 		t.Errorf("prose held for markdown is shown rendered while it streams:\n%s", v)
 	}
@@ -229,7 +230,7 @@ func TestRunViewMarkdownShowsStreamingProse(t *testing.T) {
 func TestOnceTable(t *testing.T) {
 	now := time.Date(2026, 10, 4, 10, 3, 12, 0, time.UTC)
 	root := fixtureRoot(t, now)
-	got := FleetTable(Refresh(nil, []string{root}, now), now, true, 120)
+	got := plain(FleetTable(Refresh(nil, []string{root}, now), now, true, 120))
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 	if len(lines) != 4 || !strings.HasPrefix(lines[0], "  STATE") {
 		t.Fatalf("heading plus three rows:\n%s", got)
@@ -245,6 +246,48 @@ func TestOnceTable(t *testing.T) {
 	}
 	if FleetTable(nil, now, true, 80) != "no runs\n" {
 		t.Error("an empty root says so")
+	}
+}
+
+// The printed table goes through the color-profile writer: a pipe, NO_COLOR,
+// and AGENT_RUN_COLOR=never get no escape bytes at all, and
+// AGENT_RUN_COLOR=always gets the 16-color palette, never 256 or true color.
+func TestOncePrintsThroughTheProfileWriter(t *testing.T) {
+	now := time.Now()
+	root := fixtureRoot(t, now)
+	for _, env := range []map[string]string{
+		{},
+		{"NO_COLOR": "1", "AGENT_RUN_COLOR": "always"},
+		{"AGENT_RUN_COLOR": "never"},
+	} {
+		for k, v := range env {
+			t.Setenv(k, v)
+		}
+		var out, errb bytes.Buffer
+		if rc := run([]string{"--once", root}, &out, &errb); rc != 0 {
+			t.Fatalf("exit %d: %s", rc, errb.String())
+		}
+		if strings.Contains(out.String(), "\x1b") {
+			t.Errorf("env %v: escape bytes in the printed table:\n%q", env, out.String())
+		}
+		if !strings.Contains(out.String(), "running") {
+			t.Errorf("env %v: table lost its rows:\n%s", env, out.String())
+		}
+		for k := range env {
+			os.Unsetenv(k)
+		}
+	}
+	t.Setenv("AGENT_RUN_COLOR", "always")
+	var out, errb bytes.Buffer
+	if rc := run([]string{"--once", root}, &out, &errb); rc != 0 {
+		t.Fatalf("exit %d: %s", rc, errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "\x1b[36m") {
+		t.Errorf("AGENT_RUN_COLOR=always uses the 16-color cyan for running:\n%q", s)
+	}
+	if strings.Contains(s, "38;5;") || strings.Contains(s, "38;2;") {
+		t.Errorf("forced color stays within 16 colors:\n%q", s)
 	}
 }
 

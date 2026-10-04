@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -72,7 +72,7 @@ func newModel(roots []string, ascii bool, now func() time.Time) *model {
 	if ascii {
 		m.mk = asc
 	}
-	m.vp = viewport.New(0, 0)
+	m.vp = viewport.New()
 	m.runs = Refresh(nil, roots, now())
 	if v := m.visible(); len(v) > 0 {
 		m.sel = v[0].Dir
@@ -99,7 +99,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.refresh()
 		return m, tick()
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -111,7 +111,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) View() string {
+// View is the screen for Bubble Tea, drawn in the alternate screen.
+func (m *model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	v.WindowTitle = "agent-stream watch"
+	return v
+}
+
+// render is the screen as text.
+func (m *model) render() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
@@ -160,7 +169,7 @@ func (m *model) cursor(rows []*Run) int {
 	return 0
 }
 
-func (m *model) fleetKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) fleetKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	rows := m.visible()
 	c := m.cursor(rows)
 	switch k.String() {
@@ -174,7 +183,7 @@ func (m *model) fleetKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		c = 0
 	case "G", "end":
 		c = len(rows) - 1
-	case "pgdown", " ":
+	case "pgdown", "space", " ":
 		c += m.fleetRows()
 	case "pgup":
 		c -= m.fleetRows()
@@ -418,7 +427,7 @@ func (m *model) openRun(dir string) {
 	m.vp.GotoBottom()
 }
 
-func (m *model) runKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) runKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "q":
 		return m, tea.Quit
@@ -499,7 +508,7 @@ func (m *model) rewrapAll() {
 }
 
 func (m *model) wrapWidth() int {
-	w := m.vp.Width
+	w := m.vp.Width()
 	if w < 20 {
 		w = 20
 	}
@@ -552,8 +561,8 @@ func (m *model) layout() {
 	if h < 1 {
 		h = 1
 	}
-	m.vp.Width = m.width
-	m.vp.Height = h
+	m.vp.SetWidth(m.width)
+	m.vp.SetHeight(h)
 }
 
 func (m *model) runView() string {

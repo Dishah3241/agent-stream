@@ -186,7 +186,7 @@ If `$run/header.json` exists, `run_capture_exec` prints it as the context header
 
 ## The watcher
 
-`agent-stream watch` is a small terminal app built with Bubble Tea, Bubbles, Lip Gloss, and Glamour (`cmd/agent-stream-watch`). It reads the records the pane leaves behind and nothing else: no daemon, no socket, no event parsing. Every second it re-reads the `state.json` files that changed and the new end of the open run's `display.txt`. It never writes to a record and never drives an agent.
+`agent-stream watch` is a small terminal app built with Charm v2: Bubble Tea, Bubbles, Lip Gloss, and Glamour from `charm.land` (`cmd/agent-stream-watch`; building it needs Go 1.26 or newer). It reads the records the pane leaves behind and nothing else: no daemon, no socket, no event parsing. Every second it re-reads the `state.json` files that changed and the new end of the open run's `display.txt`. It never writes to a record and never drives an agent.
 
 Build it once with Go 1.24 or newer. The binary is optional; nothing else depends on it.
 

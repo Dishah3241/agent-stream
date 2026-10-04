@@ -514,6 +514,28 @@ As built, a few details settled differently from the plan above:
 - `AGENT_STREAM_WATCH` names the binary `agent-stream watch` runs, so the
   smoke test and CI can point at a fresh build.
 
+## 9.2 Charm v2 (milestone 1 of docs/spec-themes.md)
+
+The watcher moved to Bubble Tea 2.0.10, Bubbles 2.2.1, Lip Gloss 2.0.6, and
+Glamour 2.0.1, under the new `charm.land` import paths, and needs Go 1.26.
+What changed and why it matters:
+
+- `View()` returns a `tea.View`; the alternate screen and window title are
+  set on the view, not as program options.
+- Keys arrive as `tea.KeyPressMsg`; the space bar is `"space"`.
+- Lip Gloss v2 has no global color profile. Styles always render full color
+  and the output downsamples: Bubble Tea through `tea.WithColorProfile`, the
+  printed table through a `colorprofile.Writer`. `colorProfile` in `main.go`
+  keeps the pane's rules (`NO_COLOR`, `TERM=dumb`, `AGENT_RUN_COLOR`, pipes).
+  This is what lets themes carry true-color, 256-color, and 16-color values
+  side by side.
+- `termenv` is gone from the watcher's dependencies.
+
+Behaviour is unchanged: the same tests pass, comparing the text a reader sees
+(`ansi.Strip`), plus a new test that the printed table carries no escape bytes
+on a pipe or under `NO_COLOR`, and only 16-color codes under
+`AGENT_RUN_COLOR=always`.
+
 ## 10. What was verified, and how
 
 Second round (ACP protocol 2 and the watcher):

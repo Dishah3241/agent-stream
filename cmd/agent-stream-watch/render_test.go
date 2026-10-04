@@ -5,15 +5,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestMain(m *testing.M) {
-	// Plain output so expectations are the text a reader sees.
-	lipgloss.SetColorProfile(termenv.Ascii)
 	os.Exit(m.Run())
 }
+
+// plain is the text a reader sees: Lip Gloss v2 always renders full color
+// and leaves downsampling to the output, so tests strip the escapes.
+func plain(s string) string { return ansi.Strip(s) }
 
 func renderAll(r *Renderer, lines ...string) string {
 	var out []string
@@ -21,7 +22,7 @@ func renderAll(r *Renderer, lines ...string) string {
 		out = append(out, r.Line(l)...)
 	}
 	out = append(out, r.Flush()...)
-	return strings.Join(out, "\n")
+	return plain(strings.Join(out, "\n"))
 }
 
 func TestRenderProtocolLines(t *testing.T) {
@@ -84,7 +85,7 @@ func TestRenderMarkdownBuffersParagraphs(t *testing.T) {
 	if out := r.Line("Some **bold** prose"); len(out) != 0 {
 		t.Fatalf("an unfinished paragraph is held back, got %q", out)
 	}
-	out := strings.Join(r.Line("[tool] Read x"), "\n")
+	out := plain(strings.Join(r.Line("[tool] Read x"), "\n"))
 	if !strings.Contains(out, "bold") || strings.Contains(out, "**") {
 		t.Errorf("a label line flushes the paragraph through Glamour, got %q", out)
 	}
@@ -96,7 +97,7 @@ func TestRenderMarkdownBuffersParagraphs(t *testing.T) {
 func TestPreviewKeepsState(t *testing.T) {
 	r := NewRenderer(false, 80)
 	r.Line("[think]")
-	if got := r.Preview("half a tho\x1b[1mught"); got != "half a tho[1mught" {
+	if got := plain(r.Preview("half a tho\x1b[1mught")); got != "half a tho[1mught" {
 		t.Errorf("preview is sanitized, got %q", got)
 	}
 	if got := renderAll(r, "half a thought"); got != "half a thought" {

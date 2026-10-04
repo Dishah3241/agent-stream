@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"golang.org/x/term"
 )
 
@@ -71,16 +71,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if f, ok := stdout.(*os.File); ok {
 		tty = term.IsTerminal(int(f.Fd()))
 	}
-	configureColor(tty)
+	profile := colorProfile(stdout, tty)
 
 	if *once || !tty {
 		now := time.Now()
 		runs := Refresh(nil, roots, now)
-		fmt.Fprint(stdout, FleetTable(runs, now, useASCII, tableWidth()))
+		w := &colorprofile.Writer{Forward: stdout, Profile: profile}
+		fmt.Fprint(w, FleetTable(runs, now, useASCII, tableWidth()))
 		return 0
 	}
 
-	if lipgloss.HasDarkBackground() {
+	if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
 		GlamourStyle = "dark"
 	} else {
 		GlamourStyle = "light"
@@ -92,7 +93,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(roots) == 1 && isRecord(roots[0]) {
 		m.openRun(roots[0])
 	}
-	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(m, tea.WithColorProfile(profile)).Run(); err != nil {
 		fmt.Fprintf(stderr, "agent-stream-watch: %v\n", err)
 		return 1
 	}
@@ -146,21 +147,24 @@ func wantASCII() bool {
 	return !strings.Contains(c, "utf-8") && !strings.Contains(c, "utf8")
 }
 
-// configureColor mirrors the pane's rules: NO_COLOR and TERM=dumb always
-// win, AGENT_RUN_COLOR=never disables color, always forces the 16-color
-// palette even when stdout is not a terminal, auto leaves Lip Gloss to
-// detect the terminal.
-func configureColor(tty bool) {
+// colorProfile mirrors the pane's rules. Lip Gloss v2 renders full color and
+// the output (Bubble Tea, or a colorprofile.Writer for the printed table)
+// downsamples to this profile. NO_COLOR and TERM=dumb always win and strip
+// every escape; AGENT_RUN_COLOR=never does the same; always forces the
+// 16-color palette even when stdout is not a terminal; a pipe gets plain
+// text; otherwise the terminal is detected.
+func colorProfile(stdout io.Writer, tty bool) colorprofile.Profile {
 	switch {
 	case os.Getenv("NO_COLOR") != "", os.Getenv("TERM") == "dumb":
-		lipgloss.SetColorProfile(termenv.Ascii)
+		return colorprofile.NoTTY
 	case os.Getenv("AGENT_RUN_COLOR") == "never":
-		lipgloss.SetColorProfile(termenv.Ascii)
+		return colorprofile.NoTTY
 	case os.Getenv("AGENT_RUN_COLOR") == "always":
-		lipgloss.SetColorProfile(termenv.ANSI)
+		return colorprofile.ANSI
 	case !tty:
-		lipgloss.SetColorProfile(termenv.Ascii)
+		return colorprofile.NoTTY
 	}
+	return colorprofile.Detect(stdout, os.Environ())
 }
 
 func tableWidth() int {
