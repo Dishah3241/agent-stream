@@ -53,12 +53,13 @@ type State struct {
 		Dropped int `json:"dropped"`
 	} `json:"todo_counts"`
 	Counts struct {
-		Tools      int `json:"tools"`
-		ToolErrors int `json:"tool_errors"`
-		Errors     int `json:"errors"`
-		Warnings   int `json:"warnings"`
-		Waits      int `json:"waits"`
-		Turns      int `json:"turns"`
+		Tools      int  `json:"tools"`
+		ToolErrors int  `json:"tool_errors"`
+		Errors     int  `json:"errors"`
+		Warnings   int  `json:"warnings"`
+		Waits      int  `json:"waits"`
+		Turns      *int `json:"turns"`
+		Tokens     *int `json:"tokens"`
 	} `json:"counts"`
 	LastText  string `json:"last_text"`
 	LastError string `json:"last_error"`
@@ -114,11 +115,12 @@ func (r *Run) Open() bool {
 	return r.State != nil && r.State.Status != "ended"
 }
 
-// Label is the run's project and branch, falling back to the directory name.
-func (r *Run) Label() string {
+// Label is the run's project and branch joined by sep, falling back to the
+// directory name.
+func (r *Run) Label(sep string) string {
 	if r.State != nil && r.State.Project.Name != "" {
 		if r.State.Project.Branch != "" {
-			return r.State.Project.Name + " · " + r.State.Project.Branch
+			return r.State.Project.Name + " " + sep + " " + r.State.Project.Branch
 		}
 		return r.State.Project.Name
 	}
@@ -135,16 +137,31 @@ func (r *Run) Now() string {
 		if s.Outcome != nil && s.Outcome.Summary != "" {
 			return s.Outcome.Summary
 		}
+		if k := r.OutcomeKind(); (k == "failed" || k == "error") && s.LastError != "" {
+			return s.LastError
+		}
 		if s.LastText != "" {
 			return s.LastText
 		}
 		return "ended"
 	}
 	if s.Waiting != nil {
-		return "waiting " + strings.TrimSpace(s.Waiting.Kind+" "+s.Waiting.Text)
+		w := "waiting"
+		if s.Waiting.Kind != "" {
+			w += " (" + s.Waiting.Kind + ")"
+		}
+		if s.Waiting.Text != "" {
+			w += " " + s.Waiting.Text
+		}
+		return w
 	}
 	if s.Step != "" {
 		return s.Step
+	}
+	if s.Activity.Kind == "tool" && s.Activity.Text != "" {
+		// A tool is open right now: more specific than the plan item,
+		// which the plan column and panel already show.
+		return "running " + s.Activity.Text
 	}
 	for _, t := range s.Todos {
 		if t.Status == "active" {
@@ -285,31 +302,31 @@ func stateModTime(dir string) time.Time {
 }
 
 // Tail reads display.txt from offset and returns the complete new lines,
-// the new offset, and the unfinished remainder. A file that shrank is
-// read again from the start.
-func Tail(dir string, offset int64, partial string) (lines []string, newOffset int64, newPartial string, err error) {
+// the new offset, and the unfinished remainder. A file that shrank is read
+// again from the start and reset is true, so the caller drops what it had.
+func Tail(dir string, offset int64, partial string) (lines []string, newOffset int64, newPartial string, reset bool, err error) {
 	f, err := os.Open(filepath.Join(dir, "display.txt"))
 	if err != nil {
-		return nil, offset, partial, err
+		return nil, offset, partial, false, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, offset, partial, err
+		return nil, offset, partial, false, err
 	}
 	if fi.Size() < offset {
-		offset, partial = 0, ""
+		offset, partial, reset = 0, "", true
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, partial, err
+		return nil, offset, partial, reset, err
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return nil, offset, partial, err
+		return nil, offset, partial, reset, err
 	}
 	buf := partial + string(data)
 	parts := strings.Split(buf, "\n")
 	newPartial = parts[len(parts)-1]
 	lines = parts[:len(parts)-1]
-	return lines, offset + int64(len(data)), newPartial, nil
+	return lines, offset + int64(len(data)), newPartial, reset, nil
 }

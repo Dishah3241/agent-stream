@@ -94,10 +94,12 @@ tool whose name contains `todo`, `plan`, or `task` and whose arguments carry a
 tool; when the heuristic does not match, the pane shows no plan and says
 nothing false.
 
-### 3.1 Agent Client Protocol (ACP), protocol 1 and the v2 schema
+### 3.1 Agent Client Protocol (ACP), built on protocol 2
 
 Added on request: the pane must work with ACP agents in the owner's final
-setup. The protocol site is blocked from this environment, so the shapes
+setup, and the setup is built on protocol 2. The bridge offers protocol 2
+by default and the renderer treats the v2 shapes as primary; protocol 1 is
+still read because an agent may answer `initialize` with 1. The protocol site is blocked from this environment, so the shapes
 come from the published `@agentclientprotocol/sdk` 1.7.0 package on the npm
 registry, which ships `schema/schema.json` (protocol 1) and
 `schema/v2/schema.unstable.json` (the v2 draft). Both were read in full. No
@@ -110,19 +112,21 @@ stdout. `session/update` params carry `sessionId` and `update`, with
 
 | Kind | Protocol | Rendered as |
 |---|---|---|
-| `agent_message_chunk` / `agent_message` | 1 / 2 | assistant text (chunks join; a whole message after chunks is not repeated) |
-| `agent_thought_chunk` / `agent_thought` | 1 / 2 | `[think]` then the text |
+| `agent_message_chunk` / `agent_message` | both / 2 | assistant text. Chunks join. In v2 both carry `messageId`: a whole message whose id already streamed as chunks is not repeated, and any other whole message is shown |
+| `agent_thought_chunk` / `agent_thought` | both / 2 | `[think]` then the text, deduplicated by `messageId` the same way |
 | `tool_call` / `tool_call_update` | 1 / 2 (v2 has no separate start: the first update for a `toolCallId` is the start) | `[tool] title`, then `[done]`, `[error] title: detail`, or `[error] title: cancelled` by `status` |
 | `plan {entries}` / `plan_update {plan: {type: items, entries}}` | 1 / 2 | `[todo]` lines; `plan_removed` clears the plan; markdown and file plans become a `[note]` |
-| `state_update {state}` | 2 | `requires_action` is `[wait] input: …`; `idle` with `stopReason` is `[run] result STOP` |
-| `notice {severity, title, description}` | 2 | `[note]`, `[warn]`, or `[error]` |
+| `state_update {state}` | 2 | `requires_action` is `[wait] input: …`; `idle` with `stopReason` is `[run] result STOP`, plus `(N tokens)` from `usage.totalTokens` |
+| `notice {severity, title}` | 2 | `[note]`, `[warn]`, or `[error]` |
 | `compaction_update {status}` | 2 | `[wait] compacting context`, then `[note] context compacted` or `[error]` |
-| `subagent_update` | 2 | `[note] subagent STATE: title` |
+| `subagent_update {sessionId, title, state}` | 2 | `[note] subagent STATE: title`; `state` is a StateUpdate object |
 | `user_message*`, `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `usage_update`, `tool_call_content_chunk`, `terminal_*`, `compaction_summary_chunk`, `session_message*` | both | quiet |
 
 Requests from the agent: `session/request_permission` with `toolCall.title`
-(1) or `title` / `description` / `subject` (2) and `options[]` of
-`{optionId, name, kind}` becomes `[wait] permission: title (description)`.
+(1) or `title` and `subject` (2) and `options[]` of `{optionId, name,
+kind}` becomes `[wait] permission: TITLE`. A v2 `subject` is either
+`{type: tool_call, toolCall}`, whose title stands in for an empty title, or
+`{type: command, command, cwd}`, whose command is shown in parentheses.
 Responses carry no method, so the renderer remembers the client's requests
 when a dispatcher logs both directions and otherwise recognises
 `initialize` by `protocolVersion` (`[note] acp agent NAME VERSION (protocol
@@ -206,15 +210,19 @@ nothing because nobody sends `session/prompt`. Options: leave driving to the
 dispatcher and only render the logged stream, or ship a minimal client.
 **Decision**: both. The renderer works on any logged ACP stream, and
 `agent-stream acp-bridge` is a minimal client that wraps the agent as the
-worker: it sends `initialize` (offering protocol 1 by default,
-`AGENT_STREAM_ACP_VERSION=2` to offer v2, and accepting whatever the agent
-answers), `session/new` with the cwd, and `session/prompt` with the task;
+worker: it sends `initialize` (offering protocol 2 by default,
+`AGENT_STREAM_ACP_VERSION=1` to offer protocol 1, and accepting whatever
+the agent answers; the params carry both versions' field names, `info` and
+`capabilities` for 2, `clientInfo` and `clientCapabilities` for 1),
+`session/new` with the cwd, and `session/prompt` with the task;
 answers `session/request_permission` with the first `allow_once` or
 `allow_always` option (or a reject option under
 `AGENT_STREAM_ACP_PERMISSION=deny`); declines `fs/*`, `terminal/*`, and
 elicitation requests with a JSON-RPC error because it declares no such
-capabilities; closes the agent's stdin when the turn ends (the prompt
-response under protocol 1, the idle `state_update` under v2); and
+capabilities; closes the agent's stdin when the turn ends (under protocol
+2 the idle `state_update` that carries a stop reason, or any idle after the
+turn was seen running, because the schema lets the stop reason be null;
+under protocol 1 the prompt response); and
 terminates an agent that ignores EOF after a grace period. It relays every
 stdout line unchanged, so `events.jsonl` is the agent's raw JSON-RPC and the
 `acp-json` renderer sees exactly what the agent said. The dispatcher can keep
@@ -484,7 +492,53 @@ What it does not do, on purpose: it never writes to a record, never drives
 an agent, and never replaces the pane. The pane remains the record of what
 the agent did; the watcher is a window onto several records at once.
 
+As built, a few details settled differently from the plan above:
+
+- The fleet shows every open run and the ten most recent ended runs; `a`
+  shows all ended runs. A long history would otherwise push the open runs'
+  neighbours off the screen.
+- An open run whose `state.json` has not changed for two minutes reads
+  `quiet 4m10s · …`. That answers "is it stuck" without guessing: the
+  state tracker writes on every label line and at most once a second for
+  text, so a quiet record means a quiet agent or a dead one.
+- "Now" prefers the agent's own step line, then the tool running at that
+  moment, then the active plan item, which the plan column and panel
+  already show.
+- Markdown mode holds prose until the next label line, so a list or a
+  fenced block with blank lines renders as one block, and shows the held
+  prose rendered while it streams. The unfinished last line of the record
+  is always shown as it is.
+- The Glamour style is chosen once before the event loop starts, because
+  asking the terminal for its background while Bubble Tea reads keys races
+  with the input.
+- `AGENT_STREAM_WATCH` names the binary `agent-stream watch` runs, so the
+  smoke test and CI can point at a fresh build.
+
 ## 10. What was verified, and how
+
+Second round (ACP protocol 2 and the watcher):
+
+- The v2 renderer was checked again against the SDK 1.7.0 schema, and three
+  mismatches were fixed: the permission `subject`, the subagent `state`
+  object, and the idle `usage` object. Running the bridge against a
+  synthetic protocol 2 agent found a fourth: a whole `agent_message` was
+  dropped whenever an earlier message had streamed as chunks, so the final
+  answer of a v2 turn could vanish. Messages and thoughts are now
+  deduplicated by `messageId`, with a regression test for each.
+- Seven Bash test files, `bash -n`, and `shellcheck -S error` pass on Linux.
+  `gofmt`, `go vet`, and `go test` pass for the watcher; the tests drive the
+  Bubble Tea model with window, key, and tick messages and assert that every
+  view fits the terminal.
+- The watcher was run in tmux against records from the bridge: a finished
+  run, a failed run, and a run held open mid-tool. Fleet, run view,
+  following and scrolling, the plan panel, markdown, and ASCII at 72
+  columns all rendered as intended.
+
+Not verified in the second round: a real ACP agent (none could be run
+here; the shapes are the schema's), the watcher in a real multiplexer with
+several live agents, and the Go build on macOS.
+
+First round:
 
 - `for t in tests/*.test.sh; do bash "$t"; done`: six test files, all
   passing on Linux with Bash 5.2 and jq 1.7. `bash -n` and `shellcheck -S
@@ -519,6 +573,8 @@ agent, and the pinned footer in a real multiplexer.
   kept terminal-only so the file stays a faithful log of the agent's own
   activity.
 - ACP: does the final setup drive agents itself (then only `acp-json` and
-  the state tracker matter) or should `acp-bridge` be the client? Which
-  protocol version do the agents in that setup answer `initialize` with,
-  and should the default permission policy be `allow`?
+  the state tracker matter) or should `acp-bridge` be the client? The
+  bridge now offers protocol 2; should the default permission policy stay
+  `allow`?
+- Watcher: is ten the right number of ended runs to show by default, and is
+  two minutes the right threshold for calling an open run quiet?

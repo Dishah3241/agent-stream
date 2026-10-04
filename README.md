@@ -51,6 +51,8 @@ Shell redirection needs approval, so I'll use the Edit tool instead.
 
 `docs/design.md` records the problem, the evidence, the options considered, and the decisions.
 
+ACP agents are driven over the Agent Client Protocol's protocol 2, and `agent-stream watch` opens a Bubble Tea app over every run record: a fleet of runs and a scrollable view of any one of them (see [The watcher](#the-watcher)).
+
 ## How it works
 
 The stream passes through three stages plus one side branch, one library each.
@@ -70,7 +72,7 @@ The stream passes through three stages plus one side branch, one library each.
 | `pi-json` | `pi --mode json` |
 | `cursor-json` | `cursor-agent --output-format stream-json --stream-partial-output` |
 | `grok-json` | `grok --output-format streaming-json` |
-| `acp-json` | Any Agent Client Protocol agent's stdout (newline-delimited JSON-RPC, protocol 1 and the v2 schema); `bin/agent-stream` drives one for you |
+| `acp-json` | Any Agent Client Protocol agent's stdout (newline-delimited JSON-RPC, protocol 2 first, protocol 1 still read); `bin/agent-stream` drives one for you |
 | `text` | Any worker that prints plain text, such as Codex or OpenCode |
 
 The event shapes each adapter handles, and which ones were observed in real streams, are documented at the top of `lib/agent-output.sh`.
@@ -82,6 +84,7 @@ Plain text, one line each, identical on the terminal and in `display.txt`. Old p
 ```
 [run] AGENT MODEL session ID                 start
 [run] result SUBTYPE (Nms, N turns[, N denied])  harness result
+[run] result STOP (N tokens)                 ACP protocol 2 turn end with its usage
 [tool] NAME ARGS   [done] NAME   [error] NAME: detail
 [warn] text   [note] text   [think]
 [wait] KIND: detail                           permission | retry | compacting | input
@@ -94,7 +97,7 @@ Plan lines are self-contained: `I/N` positions the item and `N` is the plan leng
 
 ## Requirements
 
-Bash 3.2 or newer and `jq`. The libraries are Bash-only; source them from Bash, not zsh. `python3` is optional and is used only to drop a repeated final answer from `text` workers. `git` is used, when present, to detect the project and branch.
+Bash 3.2 or newer and `jq`. The libraries are Bash-only; source them from Bash, not zsh. `python3` is optional and is used only to drop a repeated final answer from `text` workers. `git` is used, when present, to detect the project and branch. Go 1.24 or newer is needed only to build the optional watcher.
 
 ## Use
 
@@ -106,11 +109,12 @@ bin/agent-stream run --agent acp --task "fix the tests" -- claude-code-acp
 bin/agent-stream run --format pi-json --task "…" -- pi --mode json -p "…"
 bin/agent-stream follow ~/.agent-stream/runs/<id>     # replay, or tail while open
 bin/agent-stream state  ~/.agent-stream/runs/<id>     # print state.json (--rebuild from display.txt)
+bin/agent-stream watch                                # the watcher over every run (see below)
 ```
 
 `run` builds `header.json` (task in full, project and branch detected from git, agent, model requested), creates the record under `$AGENT_STREAM_HOME/runs/<id>` (default `~/.agent-stream`), runs the worker through the capture layer, writes the `exit` and `capture` markers, prints the ending card, and exits with the worker's status. `--agent` picks the format and a default worker command; a command after `--` always wins. Only the `claude` default was verified against a real run; see `agent-stream help`.
 
-`--agent acp` runs the agent through the built-in ACP client (`agent-stream acp-bridge`): it sends `initialize`, `session/new`, and `session/prompt`, answers `session/request_permission` (allow by default; `AGENT_STREAM_ACP_PERMISSION=deny` picks a reject option), declines file-system and terminal requests, and closes the agent's stdin when the turn ends (the prompt response under protocol 1, the idle `state_update` under protocol 2; `AGENT_STREAM_ACP_VERSION` sets the version offered). The agent's raw JSON-RPC output is what lands in `events.jsonl`.
+`--agent acp` runs the agent through the built-in ACP client (`agent-stream acp-bridge`), which is built on protocol 2. It offers `protocolVersion` 2 in `initialize` and speaks whatever version the agent answers, so a protocol 1 agent still works; `AGENT_STREAM_ACP_VERSION` changes the offer. It sends `initialize`, `session/new`, and `session/prompt`, answers `session/request_permission` (allow by default; `AGENT_STREAM_ACP_PERMISSION=deny` picks a reject option), declines file-system and terminal requests, and closes the agent's stdin when the turn ends. Under protocol 2 the turn ends on the idle `state_update`, and its token usage is recorded; under protocol 1 it ends on the prompt response. The agent's raw JSON-RPC output is what lands in `events.jsonl`.
 
 ### The libraries
 
@@ -170,7 +174,7 @@ If `$run/header.json` exists, `run_capture_exec` prints it as the context header
   "waiting": null,
   "todos": [{"n": 1, "text": "Read README.md and calc.py", "status": "done"}, …],
   "todo_counts": {"total": 3, "done": 3, "active": 0, "pending": 0, "dropped": 0},
-  "counts": {"tools": 7, "tool_errors": 1, "errors": 1, "warnings": 0, "notes": 0, "waits": 0, "text_lines": 3, "todo_updates": 9, "turns": 17},
+  "counts": {"tools": 7, "tool_errors": 1, "errors": 1, "warnings": 0, "notes": 0, "waits": 0, "text_lines": 3, "todo_updates": 9, "turns": 17, "tokens": null},
   "last_text": "I added `tests.py` …", "last_error": "Bash: Output redirection to … needs approval…", "last_warning": null,
   "result": {"subtype": "success", "detail": "success (16620ms, 17 turns, 1 denied)", "kind": "success"},
   "outcome": {"kind": "success", "exit": 0, "capture": "complete", "summary": "tests.py written & green; README appended", "detail": "…"},
@@ -178,7 +182,26 @@ If `$run/header.json` exists, `run_capture_exec` prints it as the context header
 }
 ```
 
-`status` is `starting`, `running`, `waiting`, or `ended`. `waiting` holds `{kind, text, since}` while a `[wait]` is the latest state; any later activity clears it. `outcome.kind` is `success`, `failed` (nonzero exit), `error` (zero exit but an error result), `cancelled`, or `exited` (zero exit, no harness result). The state is derived from `display.txt`, so `agent-stream state DIR --rebuild` reproduces it.
+`counts.turns` comes from a harness result that reports turns, `counts.tokens` from an ACP protocol 2 result that reports usage; both stay `null` otherwise. `status` is `starting`, `running`, `waiting`, or `ended`. `waiting` holds `{kind, text, since}` while a `[wait]` is the latest state; any later activity clears it. `outcome.kind` is `success`, `failed` (nonzero exit), `error` (zero exit but an error result), `cancelled`, or `exited` (zero exit, no harness result). The state is derived from `display.txt`, so `agent-stream state DIR --rebuild` reproduces it.
+
+## The watcher
+
+`agent-stream watch` is a small terminal app built with Bubble Tea, Bubbles, Lip Gloss, and Glamour (`cmd/agent-stream-watch`). It reads the records the pane leaves behind and nothing else: no daemon, no socket, no event parsing. Every second it re-reads the `state.json` files that changed and the new end of the open run's `display.txt`. It never writes to a record and never drives an agent.
+
+Build it once with Go 1.24 or newer. The binary is optional; nothing else depends on it.
+
+```bash
+(cd cmd/agent-stream-watch && go build -o ../../bin/agent-stream-watch .)
+bin/agent-stream watch                          # every run under $AGENT_STREAM_HOME/runs
+bin/agent-stream watch ~/.agent-stream/runs/<id>  # open one run directly
+bin/agent-stream watch | cat                    # not a terminal: print the fleet table once
+```
+
+The fleet view lists open runs first, then the ten most recent ended runs, with the state, project and branch, agent and model, plan progress, elapsed time, and what each run is doing now. An open run whose state has not changed for two minutes says how long it has been quiet. Keys: `j`/`k` move, `enter` opens, `a` shows every ended run, `r` refreshes, `q` quits.
+
+The run view pins the project, task, plan progress, tool and error counts, and token total at the top, and the current activity or wait and the record path at the bottom. Between them, the display scrolls with the same marks and colors as the pane, and follows the tail until you scroll up. `G` follows again, `p` toggles the plan panel, `m` renders the agent's prose as markdown, and `esc` goes back to the fleet.
+
+The watcher honors `NO_COLOR`, `AGENT_RUN_COLOR`, `TERM=dumb`, and the locale like the pane does; `--ascii` forces ASCII marks. `AGENT_STREAM_WATCH` points `agent-stream watch` at a binary elsewhere.
 
 ## Environment
 
@@ -192,7 +215,8 @@ If `$run/header.json` exists, `run_capture_exec` prints it as the context header
 | `run` | When set to a record directory, the pane prints a status card from its `state.json` every 40 lines |
 | `AGENT_RUN_STATUS=pinned` | Terminal-only, opt-in: a two-line footer pinned below the scrolling stream, redrawn from `state.json` at most once a second. Lines scrolled inside the reduced region may not reach scrollback in some terminals |
 | `AGENT_STREAM_HOME` | Record root for `bin/agent-stream` (default `~/.agent-stream`) |
-| `AGENT_STREAM_ACP_PERMISSION`, `AGENT_STREAM_ACP_VERSION`, `AGENT_STREAM_ACP_GRACE` | ACP bridge policy: `allow` (default) or `deny`; protocol version offered (default 1); seconds to wait for the agent to exit (default 10) |
+| `AGENT_STREAM_ACP_PERMISSION`, `AGENT_STREAM_ACP_VERSION`, `AGENT_STREAM_ACP_GRACE` | ACP bridge policy: `allow` (default) or `deny`; protocol version offered (default 2); seconds to wait for the agent to exit (default 10) |
+| `AGENT_STREAM_WATCH` | The watcher binary `agent-stream watch` runs (default: `bin/agent-stream-watch`, then `PATH`) |
 
 ## Where the names come from
 
@@ -203,9 +227,10 @@ These libraries were extracted from a private setup repository, where a dispatch
 ```bash
 for t in tests/*.test.sh; do bash "$t"; done
 tests/fixtures/agent-present/preview.sh   # eyeball every state in a real terminal
+(cd cmd/agent-stream-watch && go vet ./... && go test ./...)
 ```
 
-CI runs the tests, `bash -n`, the preview without a terminal, and `shellcheck -S error` on Linux and on macOS with the system Bash 3.2.
+CI runs the tests, `bash -n`, the preview without a terminal, and `shellcheck -S error` on Linux and on macOS with the system Bash 3.2. A third job runs `gofmt`, `go vet`, and `go test` for the watcher, builds it, and runs `tests/agent-watch.test.sh` against a record produced by a protocol 2 agent through the bridge.
 
 ## License
 

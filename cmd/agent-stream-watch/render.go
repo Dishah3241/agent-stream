@@ -25,6 +25,12 @@ var (
 	stBold = lipgloss.NewStyle().Bold(true)
 )
 
+// GlamourStyle is the Glamour standard style for markdown rendering. main
+// picks it once before the event loop starts ("dark", "light", or "notty"),
+// because asking the terminal for its background while Bubble Tea owns the
+// input would race with key reads.
+var GlamourStyle = "dark"
+
 // Marks: unicode by default; ASCII when the terminal says so.
 type marks struct {
 	head, step, done, err, warn, idle, wait, drop, sep, tl, bl, h, v, h2, ell string
@@ -48,16 +54,18 @@ func clean(s string) string {
 // previous row was a plan row, whether a think span is open, and whether
 // anything has been printed yet (for the air before cards).
 type Renderer struct {
-	m         marks
-	openCards int
-	prevTodo  bool
-	thinking  bool
-	started   bool
-	Markdown  bool
-	width     int
-	prose     []string // pending plain lines when Markdown is on
-	md        *glamour.TermRenderer
-	mdWidth   int
+	m          marks
+	openCards  int
+	prevTodo   bool
+	thinking   bool
+	started    bool
+	Markdown   bool
+	width      int
+	prose      []string // pending plain lines when Markdown is on
+	pendingN   int      // len(prose) when pendingOut was rendered
+	pendingOut []string
+	md         *glamour.TermRenderer
+	mdWidth    int
 }
 
 // NewRenderer picks marks for the terminal and sets the wrap width used
@@ -105,7 +113,7 @@ func (r *Renderer) Line(raw string) []string {
 	case "note":
 		out = append(out, r.side(stDim.Render(rest)))
 	case "think":
-		out = append(out, r.divider(stDim.Render(r.m.idle+" think"+optional(rest))))
+		out = append(out, r.divider(stDim.Render(r.m.idle+" think"+optional(rest)))...)
 	case "wait":
 		kind, text := splitFirst(rest)
 		kind = strings.TrimSuffix(kind, ":")
@@ -140,7 +148,7 @@ func (r *Renderer) Line(raw string) []string {
 		default:
 			body = stDim.Render(r.m.idle + " " + rest)
 		}
-		out = append(out, r.divider(body))
+		out = append(out, r.divider(body)...)
 	case "todo":
 		out = append(out, r.todoRow(rest)...)
 	}
@@ -151,6 +159,17 @@ func (r *Renderer) Line(raw string) []string {
 // Flush returns any prose still pending (markdown mode buffers paragraphs).
 func (r *Renderer) Flush() []string { return r.flushProse() }
 
+// Preview styles an unfinished last line (text still streaming, no newline
+// yet) without changing the renderer's state, so the reader sees it now and
+// the line is rendered properly once it is complete.
+func (r *Renderer) Preview(partial string) string {
+	line := clean(partial)
+	if r.thinking {
+		return stDim.Render(line)
+	}
+	return line
+}
+
 func (r *Renderer) plain(line string) []string {
 	r.prevTodo = false
 	if r.thinking {
@@ -158,10 +177,10 @@ func (r *Renderer) plain(line string) []string {
 		return []string{stDim.Render(line)}
 	}
 	if r.Markdown {
+		// Prose is held until the next label line so a paragraph run,
+		// a list, or a code fence with blank lines renders as one block.
+		// Pending shows it in the meantime.
 		r.prose = append(r.prose, line)
-		if strings.TrimSpace(line) == "" {
-			return r.flushProse()
-		}
 		return nil
 	}
 	r.started = true
@@ -174,7 +193,26 @@ func (r *Renderer) flushProse() []string {
 	}
 	text := strings.Join(r.prose, "\n")
 	r.prose = nil
+	r.pendingN, r.pendingOut = 0, nil
 	r.started = true
+	return r.markdown(text)
+}
+
+// Pending renders the prose held back in markdown mode without consuming
+// it, so a live run shows its answer while it streams. The result is
+// cached until more prose arrives.
+func (r *Renderer) Pending() []string {
+	if len(r.prose) == 0 {
+		return nil
+	}
+	if r.pendingN != len(r.prose) || r.pendingOut == nil {
+		r.pendingN = len(r.prose)
+		r.pendingOut = r.markdown(strings.Join(r.prose, "\n"))
+	}
+	return r.pendingOut
+}
+
+func (r *Renderer) markdown(text string) []string {
 	if strings.TrimSpace(text) == "" {
 		return []string{""}
 	}
@@ -183,7 +221,7 @@ func (r *Renderer) flushProse() []string {
 		if w < 20 {
 			w = 20
 		}
-		md, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(w), glamour.WithEmoji())
+		md, err := glamour.NewTermRenderer(glamour.WithStandardStyle(GlamourStyle), glamour.WithWordWrap(w), glamour.WithEmoji())
 		if err != nil {
 			return strings.Split(text, "\n")
 		}
@@ -296,7 +334,7 @@ func Shorten(s string, width int, m marks) string {
 	if len(rs) <= width {
 		return s
 	}
-	return string(rs[:width-1]) + m.ell
+	return string(rs[:width-len([]rune(m.ell))]) + m.ell
 }
 
 // Count pluralises: 1 tool, 2 tools.

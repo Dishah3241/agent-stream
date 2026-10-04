@@ -7,6 +7,8 @@
 #   agent-stream state RECORD_DIR [--rebuild]
 #   agent-stream render FORMAT        < events  > activity lines
 #   agent-stream present              < activity lines
+#   agent-stream watch [--ascii] [--once] [ROOT_OR_RECORD...]
+#                                     the Bubble Tea watcher over the records
 #   agent-stream acp-bridge --task T [--cwd D] -- acp-agent argv...
 #   agent-stream help
 #
@@ -14,7 +16,8 @@
 #   --agent NAME     claude | pi | cursor | grok | codex | opencode | acp
 #                    picks the stream format and a default worker command;
 #                    acp needs the agent command after -- and drives it
-#                    through the built-in ACP client (see acp-bridge)
+#                    through the built-in ACP client, protocol 2 by default
+#                    (see acp-bridge)
 #   --format FORMAT  claude-json | pi-json | cursor-json | grok-json | acp-json | text
 #   --task TEXT      the task, saved in full, shown shortened
 #   --task-file F    read the task from a file ("-" for stdin)
@@ -359,6 +362,29 @@ as_cmd_run() {
   )
 }
 
+# agent-stream watch: exec the watcher binary: $AGENT_STREAM_WATCH when set,
+# else the one built from cmd/agent-stream-watch into bin/, else the one on
+# PATH. It only reads records.
+as_cmd_watch() {
+  local exe=""
+  if [[ -n "${AGENT_STREAM_WATCH:-}" ]]; then
+    [[ -x "$AGENT_STREAM_WATCH" ]] && exe="$AGENT_STREAM_WATCH"
+  elif [[ -x "$AS_ROOT/bin/agent-stream-watch" ]]; then
+    exe="$AS_ROOT/bin/agent-stream-watch"
+  elif command -v agent-stream-watch >/dev/null 2>&1; then
+    exe="$(command -v agent-stream-watch)"
+  fi
+  if [[ -z "$exe" ]]; then
+    {
+      printf 'agent-stream: the watcher is not built. It needs Go 1.24 or newer once, to build:\n'
+      printf '  (cd %s/cmd/agent-stream-watch && go build -o ../../bin/agent-stream-watch .)\n' "$AS_ROOT"
+      printf 'Without it, follow one run with: agent-stream follow RECORD_DIR\n'
+    } >&2
+    exit 127
+  fi
+  exec "$exe" "$@"
+}
+
 as_record_dir() {
   local d="${1:-}"
   [[ -n "$d" ]] || as_die "need a record directory"
@@ -407,6 +433,7 @@ case "${1:-help}" in
   acp-bridge) shift; as_cmd_acp_bridge "$@" ;;
   follow) shift; as_cmd_follow "$@" ;;
   state) shift; as_cmd_state "$@" ;;
+  watch) shift; as_cmd_watch "$@" ;;
   render) shift
     # shellcheck source=../lib/agent-output.sh
     . "$AS_LIB/agent-output.sh"; agent_output_render "$@" ;;

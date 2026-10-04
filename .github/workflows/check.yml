@@ -41,3 +41,30 @@ jobs:
 
       - name: Shellcheck (errors only)
         run: shellcheck -S error lib/*.sh bin/agent-stream tests/*.sh tests/fixtures/agent-present/*.sh
+
+  watcher:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cmd/agent-stream-watch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/agent-stream-watch/go.mod
+          cache-dependency-path: cmd/agent-stream-watch/go.sum
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq >/dev/null
+
+      - name: Format, vet, test, build
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+          go build -o "$RUNNER_TEMP/agent-stream-watch" .
+
+      - name: Watcher smoke test against a real record
+        working-directory: .
+        run: AGENT_STREAM_WATCH="$RUNNER_TEMP/agent-stream-watch" bash tests/agent-watch.test.sh
