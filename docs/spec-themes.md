@@ -289,13 +289,29 @@ Each milestone is a pull request that passes CI on Linux and macOS.
 - No daemon or service on the Herdr machines.
 - No browser dashboard in this round.
 
-## 10. Open questions
+## 10. Resolved questions
 
-1. Can `herdr agent run` pass the parent run's id (for example in
-   `AGENT_RUN_RUN`) so the board can nest child runs under their parent?
-2. Are the four machines reachable by SSH from where you will run the board,
-   and under what host names?
-3. The PC theme's eggs: are jokes fine on the client's workstation, or
-   should bottling ship with eggs off?
-4. For Forge metrics: which three or four numbers matter most, so the
-   observatory theme can give them pride of place?
+The owner asked for the best recommendation on each; these are now part of
+the spec.
+
+1. **Nesting does not depend on Herdr.** `agent-stream run` exports
+   `AGENT_STREAM_PARENT` (the record directory) to its worker. A nested
+   `agent-stream run`, including one started by a skill through
+   `herdr agent run`, records it as `parent` in `header.json` and
+   `state.json`. If Herdr does not pass the environment through, a skill
+   passes `--parent DIR` explicitly. The board nests children under parents
+   when both are visible, and shows an orphan as a normal row.
+2. **Hosts are named, not discovered.** `board.json` names each machine;
+   `ssh` defaults to that name, so a `Host forge` entry in `~/.ssh/config`
+   is all a machine needs. `root` defaults to `~/.agent-stream/runs`. A
+   machine that does not answer is "no signal", never an error that stops
+   the board.
+3. **Bottling ships with eggs off.** A theme can declare
+   `"eggs_default": false`; a project turns them on with `"eggs": true` in
+   `.agent-stream/config.json`. Every other theme keeps eggs on at `loud`.
+4. **Forge metrics: the project chooses, with a sensible default.**
+   `.agent-stream/config.json` may list `"metrics": ["residual", "rate",
+   "cost", "tokens"]`; those get pride of place (gauge, sparkline, magnitude
+   readout) in that order. Without the list, the first four metric names a
+   run reports are used. Plan progress, ETA, and heartbeat always show and do
+   not count toward the four.
