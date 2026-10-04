@@ -43,7 +43,11 @@ jobs:
         run: shellcheck -S error lib/*.sh bin/agent-stream tests/*.sh tests/fixtures/agent-present/*.sh
 
   watcher:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: cmd/agent-stream-watch
@@ -55,8 +59,13 @@ jobs:
           go-version-file: cmd/agent-stream-watch/go.mod
           cache-dependency-path: cmd/agent-stream-watch/go.sum
 
-      - name: Install jq
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq >/dev/null
+      - name: Install jq and sshd (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq openssh-server >/dev/null
+
+      - name: Install jq (Mac)
+        if: runner.os == 'macOS'
+        run: command -v jq >/dev/null || brew install jq
 
       - name: Format, vet, test, build
         run: |
@@ -65,6 +74,6 @@ jobs:
           go test ./...
           go build -o "$RUNNER_TEMP/agent-stream-watch" .
 
-      - name: Watcher smoke test against a real record
+      - name: Watcher smoke test against a real record, and the board over real ssh
         working-directory: .
-        run: AGENT_STREAM_WATCH="$RUNNER_TEMP/agent-stream-watch" bash tests/agent-watch.test.sh
+        run: AGENT_STREAM_REAL_SSH=1 AGENT_STREAM_WATCH="$RUNNER_TEMP/agent-stream-watch" bash tests/agent-watch.test.sh

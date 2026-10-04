@@ -285,7 +285,7 @@ tests/fixtures/agent-present/preview.sh   # eyeball every state in a real termin
 (cd cmd/agent-stream-watch && go vet ./... && go test ./...)
 ```
 
-CI runs the tests, `bash -n`, the preview without a terminal, and `shellcheck -S error` on Linux and on macOS with the system Bash 3.2. A third job runs `gofmt`, `go vet`, and `go test` for the watcher, builds it, and runs `tests/agent-watch.test.sh` against a record produced by a protocol 2 agent through the bridge.
+CI runs the tests, `bash -n`, the preview without a terminal, and `shellcheck -S error` on Linux and on macOS with the system Bash 3.2. The watcher job, also on Linux and macOS, runs `gofmt`, `go vet`, and `go test`, builds the binary, and runs `tests/agent-watch.test.sh` with `AGENT_STREAM_REAL_SSH=1`. That test reads a record produced by a protocol 2 agent through the bridge. It also starts a private sshd on a loopback port and checks the board over the real ssh client: the shared connection outlives sshd, and a refused machine is no signal.
 
 ## License
 

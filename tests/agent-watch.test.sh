@@ -114,4 +114,82 @@ rc=0
 AGENT_STREAM_WATCH="$WATCH" "$BIN" board "$TMP/missing.json" --once >/dev/null 2>"$TMP/err" || rc=$?
 [[ "$rc" == 2 ]] && grep -q 'missing.json' "$TMP/err" || fail "a missing board.json is a usage error naming it"
 
+# --------------------------------------------------------- board, real ssh ---
+# Opt-in (AGENT_STREAM_REAL_SSH=1, CI sets it): a private sshd on a loopback
+# port with throwaway keys, and the board through the real ssh client and its
+# ControlMaster. sshd runs as the current user, so it can only log in as them.
+
+if [[ "${AGENT_STREAM_REAL_SSH:-}" == 1 ]]; then
+  SSHD="$(command -v sshd || true)"
+  [[ -n "$SSHD" ]] || { [[ -x /usr/sbin/sshd ]] && SSHD=/usr/sbin/sshd; }
+  [[ -n "$SSHD" ]] || fail "AGENT_STREAM_REAL_SSH=1 needs sshd"
+  command -v ssh >/dev/null || fail "AGENT_STREAM_REAL_SSH=1 needs ssh"
+  S="$TMP/sshd"
+  mkdir -p "$S" "$S/home" && chmod 700 "$S"
+  ssh-keygen -q -t ed25519 -N '' -f "$S/host_key" || fail "host key"
+  ssh-keygen -q -t ed25519 -N '' -f "$S/user_key" || fail "user key"
+  cp "$S/user_key.pub" "$S/authorized_keys"
+  port=$(( 20000 + $$ % 20000 ))
+  cat >"$S/sshd_config" <<C
+Port $port
+ListenAddress 127.0.0.1
+HostKey $S/host_key
+AuthorizedKeysFile $S/authorized_keys
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+StrictModes no
+UsePAM no
+PidFile $S/sshd.pid
+C
+  # Root's sshd wants its privilege separation directory.
+  if [[ "$(id -u)" == 0 ]]; then mkdir -p /run/sshd; fi
+  # Stop sshd and any shared connection even when an assertion fails.
+  real_ssh_cleanup() {
+    [[ -f "$S/sshd.pid" ]] && kill "$(cat "$S/sshd.pid")" 2>/dev/null
+    find "$S/home" "$S/cache" -type s 2>/dev/null | while IFS= read -r s; do
+      ssh -S "$s" -O exit forge-real >/dev/null 2>&1
+    done
+    rm -rf "$TMP"
+  }
+  trap real_ssh_cleanup EXIT
+  "$SSHD" -f "$S/sshd_config" -E "$S/sshd.log" || fail "sshd did not start: $(cat "$S/sshd.log" 2>/dev/null)"
+  cat >"$S/ssh_config" <<C
+Host forge-real
+  HostName 127.0.0.1
+  Port $port
+  User $(id -un)
+  IdentityFile $S/user_key
+  IdentitiesOnly yes
+  StrictHostKeyChecking no
+  UserKnownHostsFile $S/known_hosts
+  LogLevel ERROR
+C
+  # Wait for sshd to accept a login.
+  i=0
+  until ssh -F "$S/ssh_config" -o BatchMode=yes forge-real true 2>"$S/login.err"; do
+    i=$((i + 1))
+    [[ $i -lt 50 ]] || fail "no login to the private sshd: $(cat "$S/login.err") $(cat "$S/sshd.log")"
+    sleep 0.1
+  done
+  printf '{"machines": [{"name": "forge", "ssh": "forge-real", "root": "%s/forge/runs"}]}\n' "$TMP" >"$S/board.json"
+  # The cache directory, which holds the ControlMaster socket, under $S.
+  board_env() { HOME="$S/home" XDG_CACHE_HOME="$S/cache" AGENT_STREAM_SSH="ssh -F $S/ssh_config" \
+    AGENT_STREAM_WATCH="$WATCH" COLUMNS=120 "$@"; }
+  board_env "$BIN" board "$S/board.json" --once >"$TMP/realboard" 2>"$TMP/err" || fail "board over real ssh: $(cat "$TMP/err")"
+  grep -q '^forge .* fleet' "$TMP/realboard" || fail "real ssh: the forge run is listed: $(cat "$TMP/realboard") $(cat "$TMP/err")"
+  grep -Eq '(└|`-) ' "$TMP/realboard" || fail "real ssh: the inner run is nested: $(cat "$TMP/realboard")"
+  sock="$(find "$S/home" "$S/cache" -type s 2>/dev/null | head -n 1)"
+  [[ -n "$sock" ]] || fail "real ssh: the ControlMaster socket persists between polls"
+  # A second board reuses the master: it still answers with sshd gone.
+  kill "$(cat "$S/sshd.pid")" && rm -f "$S/sshd.pid"
+  board_env "$BIN" board "$S/board.json" --once >"$TMP/realboard2" 2>"$TMP/err" || fail "second board: $(cat "$TMP/err")"
+  grep -q '^forge .* fleet' "$TMP/realboard2" || fail "real ssh: the second board rides the shared connection: $(cat "$TMP/realboard2")"
+  ssh -S "$sock" -O exit forge-real >/dev/null 2>&1 || true
+  # With the master gone too, the machine is no signal.
+  board_env "$BIN" board "$S/board.json" --once >"$TMP/realboard3" 2>"$TMP/err" || fail "third board: $(cat "$TMP/err")"
+  grep -q '^forge .*no signal' "$TMP/realboard3" || fail "real ssh: a refused machine is no signal: $(cat "$TMP/realboard3")"
+fi
+
 echo "agent-watch test: all assertions passed"
