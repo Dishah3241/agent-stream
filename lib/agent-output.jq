@@ -2,7 +2,8 @@
 # Selected by $fmt (pi-json | claude-json | cursor-json | grok-json | text),
 # one raw input line at a time with cross-line state carried by
 # "foreach (inputs, null)" so EOF can raise halt_error(5). See
-# lib/agent-output.sh for the protocol evidence.
+# lib/agent-output.sh for the protocol evidence and docs/design.md for the
+# activity line protocol this program emits.
 #
 # State fields:
 #   act  what to emit for the current line: skip | emit | warn
@@ -11,10 +12,15 @@
 #   saw_delta  text already streamed for the current turn (dedup snapshots)
 #   last_text  accumulated/last assistant text (claude/cursor result dedup)
 #   tools      id -> tool name for results that omit the name
+#   todos      the plan as last shown: [{text, status}]
+#   task_ids   Claude TaskCreate id -> index into todos
+#   pending    Claude tool_use id -> plan operation awaiting its tool_result
+#   plan_ids   tool ids whose start was shown as a plan, so no [done] follows
 
 def init_state:
   { act: "skip", out: "", w: 0, wl: 0, we: "", saw_delta: false, last_text: "",
-    tools: {}, mid: false, thinking: false };
+    tools: {}, mid: false, thinking: false, cwd: null,
+    todos: [], task_ids: {}, pending: {}, plan_ids: {} };
 
 # Terminal safety: drop ANSI CSI/OSC sequences and control characters, keep
 # line breaks, tabs, and Unicode exactly as they are. Non-strings become
@@ -55,6 +61,12 @@ def emit($t):
   | .act = "emit"
   | .out = ((if .mid then "\n" else "" end) + $t + "\n")
   | .mid = false;
+# append($t): add one more full line to what this event already emits.
+def append($t):
+  .thinking = false
+  | .act = "emit"
+  | .out = ((.out // "") + (if .mid then "\n" else "" end) + $t + "\n")
+  | .mid = false;
 def raw($t): .act = "emit" | .out = $t | .mid = (($t | endswith("\n")) | not);
 # A thinking span is one [think] line, then the reasoning as it arrives.
 # The next answer or label starts on its own line.
@@ -75,18 +87,35 @@ def raw_after_think($t):
     | .mid = (($t | endswith("\n")) | not)
   else raw($t) end;
 
-# Tool arguments: identify the tool, never dump payloads.
+# Tool arguments: identify the tool, never dump payloads. "description"
+# comes before "prompt" so a subagent call shows its one-line description
+# rather than the opening of its prompt.
 def arg_field_order:
   ["path", "file_path", "target_file", "notebook_path", "command", "pattern",
-   "url", "query", "file", "dir", "prompt", "description"];
+   "url", "query", "file", "dir", "description", "prompt", "subject", "taskId"];
 
-def tool_args($a):
+def path_fields:
+  ["path", "file_path", "target_file", "notebook_path", "file", "dir"];
+
+# A path is shown relative to the harness working directory when the stream
+# said what that is ($cwd from the init event), and a path that is still too
+# long keeps its tail, because the file name is the part a reader needs.
+def show_path($p; $cwd):
+  ($p | tostring | clean | gsub("\\s+"; " ")) as $s
+  | (if ($cwd | type) == "string" and $cwd != "" and ($s | startswith($cwd + "/"))
+       then $s[($cwd | length) + 1:] else $s end) as $r
+  | if ($r | length) > 80 then "..." + $r[-77:] else $r end;
+
+def tool_args($a; $cwd):
   if ($a | type) == "object" then
     ([arg_field_order[] | select($a[.] != null)] | first) as $k
     | if $k == null then ($a | tostring | clean | brief(80))
+      elif (path_fields | index($k)) != null then show_path($a[$k]; $cwd)
       else ($a[$k] | tostring | clean | brief(80)) end
   elif ($a | type) == "null" then ""
   else ($a | tostring | clean | brief(80)) end;
+
+def tool_args($a): tool_args($a; null);
 
 # Typed tool results: walk string / {type:text} arrays / known object
 # wrappers. Never pass an array or object to gsub, never dump the whole
@@ -106,8 +135,9 @@ def as_text($v):
       else as_text(.)
       end) | join(" "))
   elif ($v | type) == "object" then
-    ([$v.output, $v.content, $v.text, $v.message, $v.error, $v.detail]
-     | map(select(. != null)) | first) as $inner
+    ([$v.output, $v.content, $v.text, $v.message, $v.error, $v.detail,
+      $v.stderr, $v.stdout, $v.failure, $v.reason]
+     | map(select(. != null and . != "")) | first) as $inner
     | if $inner == null then ""
       else as_text($inner)
       end
@@ -117,6 +147,72 @@ def as_text($v):
 def tool_result($r):
   as_text($r) | clean | brief(160);
 
+# ------------------------------------------------------------------ plans --
+# The plan protocol: "[todo] I/N STATUS text", one self-contained line per
+# item, STATUS in pending | active | done | dropped. The whole list is shown
+# when it first appears or changes length; otherwise only changed items.
+
+def todo_status($s):
+  (if ($s | type) == "string" then ($s | ascii_downcase) else "" end) as $w
+  | if ($w | test("progress|active|doing|running|current|started")) then "active"
+    elif ($w | test("complete|done|finished|resolved|closed")) then "done"
+    elif ($w | test("cancel|delet|skip|drop|remov|abandon")) then "dropped"
+    else "pending" end;
+
+def todo_text($o):
+  if ($o | type) == "object" then
+    ([$o.content, $o.text, $o.title, $o.subject, $o.description, $o.step, $o.name]
+     | map(select(type == "string" and length > 0)) | first) as $t
+    | safe_brief($t // ""; 120)
+  elif ($o | type) == "string" then safe_brief($o; 120)
+  else "" end;
+
+def todo_item($o):
+  { text: todo_text($o),
+    status: (if ($o | type) == "object" then todo_status($o.status // $o.state // "") else "pending" end) };
+
+# plan_items($a): the array of items behind a plan tool's arguments, or
+# null when the arguments carry no plan. Objects with a text field count;
+# bare strings count as pending items.
+def plan_items($a):
+  if ($a | type) != "object" then null
+  else
+    ([ ($a.todos, $a.items, $a.tasks, $a.plan, $a.steps, $a.todo)
+       | select(type == "array" and length > 0
+                and all(.[]; type == "object" or type == "string")) ]
+     | first) as $arr
+    | if $arr == null then null
+      else ($arr | map(todo_item(.)) | map(select(.text != ""))) end
+  end;
+
+def acp_plan_entries($entries):
+  if ($entries | type) != "array" then null
+  else [$entries[] | select(type == "object") | todo_item(.)] | map(select(.text != "")) end;
+
+def is_plan_tool($name):
+  (if ($name | type) == "string" then ($name | ascii_downcase) else "" end)
+  | test("todo|plan|task");
+
+def todo_lines($old; $new):
+  ($new | length) as $n
+  | ($old | length) as $o
+  | if $o < $n and $new[0:$o] == $old then
+      # Items were appended: show only the new ones.
+      [range($o; $n) | "[todo] \(. + 1)/\($n) \($new[.].status) \($new[.].text)"]
+    elif $o != $n then
+      [range(0; $n) | "[todo] \(. + 1)/\($n) \($new[.].status) \($new[.].text)"]
+    else
+      [range(0; $n) | select($old[.] != $new[.])
+       | "[todo] \(. + 1)/\($n) \($new[.].status) \($new[.].text)"]
+    end;
+
+# set_todos($new): replace the plan and emit what changed.
+def set_todos($new):
+  todo_lines(.todos; $new) as $ls
+  | .todos = $new
+  | reduce $ls[] as $l (.; append($l));
+
+# ------------------------------------------------------------ quiet lists --
 # pi event types that are real activity but deliberately stay quiet here.
 def pi_quiet:
   ["agent_start", "turn_start", "turn_end", "agent_settled", "queue_update",
@@ -125,87 +221,195 @@ def pi_quiet:
    "summarization_retry_finished", "bash_execution_update",
    "tool_execution_update"];
 
+# Claude top-level types seen in real streams that carry no activity.
 def claude_quiet:
-  ["control_request", "control_response", "keepalive", "rate_limit_event"];
+  ["control_response", "keepalive", "rate_limit_event", "active_goal",
+   "autocompact_state", "stream_event"];
 
 def claude_system_quiet:
-  ["thinking_tokens", "hook_started", "hook_response"];
+  ["thinking_tokens", "hook_started", "hook_response", "task_progress",
+   "task_updated", "api_retry", "status"];
 
 def grok_quiet:
   ["usage", "available_commands"];
 
-# Claude: content blocks arrive as complete messages, so each rendered
-# piece is a full line appended to .out; the tool id -> name map lets tool
-# results carry the tool's name.
-def claude_block_out($c):
-  ($c.type // "?") as $ct
-  | if $ct == "text" then
-      ($c.text // "" | clean) as $txt
-      | (if ($txt | gsub("^\\s+|\\s+$"; "") | length) > 0
-         then ($txt | sub("\n+$"; "")) + "\n"
-         else "" end)
-    elif $ct == "tool_use" then
-      "[tool] \(safe_brief($c.name // "tool"; 40)) \(tool_args($c.input))\n"
-    elif $ct == "thinking" then
-      ($c.thinking // "" | clean) as $txt
-      | if ($txt | gsub("^\\s+|\\s+$"; "") | length) > 0
-        then "[think]\n" + ($txt | sub("\n+$"; "")) + "\n"
-        else "" end
-    elif $ct == "redacted_thinking" then
-      ""
+# ------------------------------------------------------------------ claude --
+# Content blocks arrive as complete messages, so each rendered piece is a
+# full line; the tool id -> name map lets tool results carry the tool's name.
+
+def claude_text_block($txt):
+  if ($txt | gsub("^\\s+|\\s+$"; "") | length) > 0
+  then append($txt | sub("\n+$"; "")) else . end;
+
+# Plan tools that Claude Code uses: TodoWrite (whole list per call) and the
+# TaskCreate / TaskUpdate / TaskList family (incremental, ids assigned by the
+# harness and reported in the tool result).
+def claude_plan_tool($name):
+  ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"] | index($name) != null;
+
+def claude_tool_use($c):
+  ($c.name // "tool") as $name
+  | (if (($c.id // "") | type) == "string" then $c.id else "" end) as $id
+  | (if $id != "" then .tools = (.tools + {($id): safe($name)}) else . end)
+  | if $name == "TodoWrite" then
+      (plan_items($c.input) // []) as $items
+      | if ($items | length) > 0 then set_todos($items) else . end
+    elif $name == "TaskCreate" then
+      .pending = (.pending + {($id): {op: "create", subject: todo_text($c.input)}})
+    elif $name == "TaskUpdate" then
+      .pending = (.pending + {($id): {op: "update",
+                                      task: safe($c.input.taskId // ""),
+                                      status: (if ($c.input.status | type) == "string" then $c.input.status else null end),
+                                      subject: (if ($c.input.subject | type) == "string" then safe_brief($c.input.subject; 120) else null end)}})
+    elif $name == "TaskList" or $name == "TaskGet" then
+      .pending = (.pending + {($id): {op: "list"}})
     else
-      "[note] assistant content: \(safe_brief($ct; 40))\n"
+      append("[tool] \(safe_brief($name; 40)) \(tool_args($c.input; .cwd))")
     end;
 
-def claude_tool_result_out($c; $tools):
-  ($tools[$c.tool_use_id] // "tool") as $name
-  | if ($c.is_error // false)
-      then "[error] \($name): \(tool_result($c.content))\n"
-      else "[done] \($name)\n"
+# claude_task_apply: apply a TaskCreate / TaskUpdate / TaskList outcome once
+# its tool_result arrives. $tur is the event-level tool_use_result (may be
+# null on older builds); $content is the tool_result text.
+def claude_task_id_from_text($content):
+  (as_text($content) | capture("Task #(?<id>[0-9]+)") | .id) // null;
+
+def claude_task_create($op; $tur; $content):
+  (if ($tur.task.id | type) == "string" or ($tur.task.id | type) == "number"
+     then ($tur.task.id | tostring)
+   else claude_task_id_from_text($content) end) as $tid
+  | (if ($tur.task.subject | type) == "string" and ($tur.task.subject | length) > 0
+       then safe_brief($tur.task.subject; 120) else $op.subject end) as $subject
+  | if $tid == null or $subject == "" then .
+    elif (.task_ids[$tid] // null) != null then .
+    else
+      (.todos | length) as $idx
+      | .task_ids = (.task_ids + {($tid): $idx})
+      | set_todos(.todos + [{text: $subject, status: "pending"}])
+    end;
+
+def claude_task_update($op; $tur):
+  (if ($tur.taskId | type) == "string" or ($tur.taskId | type) == "number"
+     then ($tur.taskId | tostring) else $op.task end) as $tid
+  | (if ($tur.statusChange.to | type) == "string" then $tur.statusChange.to else $op.status end) as $status
+  | if $tid == "" then .
+    else
+      (.task_ids[$tid] // null) as $idx
+      | if $idx == null then
+          # An item created before this stream started (resumed session).
+          (.todos | length) as $new
+          | .task_ids = (.task_ids + {($tid): $new})
+          | set_todos(.todos + [{text: ($op.subject // "task #\($tid)"),
+                                 status: (if $status == null then "pending" else todo_status($status) end)}])
+        else
+          (.todos[$idx]) as $cur
+          | ($cur
+             | (if $status != null then .status = todo_status($status) else . end)
+             | (if ($op.subject // null) != null then .text = $op.subject else . end)) as $next
+          | set_todos(.todos | .[$idx] = $next)
+        end
+    end;
+
+def claude_task_list($tur):
+  if ($tur.tasks | type) != "array" then .
+  else
+    ($tur.tasks | map(select(type == "object"))) as $ts
+    | reduce ($ts | to_entries)[] as $e (
+        .task_ids = {};
+        .task_ids = (.task_ids + {(($e.value.id // $e.key) | tostring): $e.key}))
+    | set_todos($ts | map(todo_item(.)))
+  end;
+
+def claude_tool_result($c; $tur):
+  ($c.tool_use_id // "") as $id
+  | (.tools[$id] // "tool") as $name
+  | (.pending[$id] // null) as $op
+  | if $op != null then
+      .pending = (.pending | del(.[$id]))
+      | if ($c.is_error // false) then
+          append("[error] \($name): \(tool_result($c.content))")
+        elif $op.op == "create" then claude_task_create($op; $tur; $c.content)
+        elif $op.op == "update" then claude_task_update($op; $tur)
+        elif $op.op == "list" then claude_task_list($tur)
+        else . end
+    elif $name == "TodoWrite" then
+      (if ($c.is_error // false) then append("[error] TodoWrite: \(tool_result($c.content))") else . end)
+    elif ($c.is_error // false) then
+      append("[error] \($name): \(tool_result($c.content))")
+    else
+      append("[done] \($name)")
+    end;
+
+def claude_block($c):
+  ($c.type // "?") as $ct
+  | if $ct == "text" then
+      (($c.text // "") | clean) as $txt
+      | claude_text_block($txt)
+      | (if (($c.text // "") | type) == "string" and $c.text != "" then .last_text = $c.text else . end)
+    elif $ct == "tool_use" then claude_tool_use($c)
+    elif $ct == "thinking" then
+      (($c.thinking // "") | clean) as $txt
+      | if ($txt | gsub("^\\s+|\\s+$"; "") | length) > 0
+        then append("[think]") | append($txt | sub("\n+$"; ""))
+        else . end
+    elif $ct == "redacted_thinking" then .
+    else append("[note] assistant content: \(safe_brief($ct; 40))")
     end;
 
 def result_closer($ev):
   "[run] result \(safe_brief($ev.subtype // "unknown"; 40))"
   + (if ($ev.duration_ms | type) == "number"
-      then " (\($ev.duration_ms)ms, \($ev.num_turns // "?") turns)"
+      then " (\($ev.duration_ms)ms, \($ev.num_turns // "?") turns"
+           + (if ($ev.permission_denials | type) == "array" and ($ev.permission_denials | length) > 0
+              then ", \($ev.permission_denials | length) denied" else "" end)
+           + ")"
      else "" end);
+
+def claude_system($ev):
+  ($ev.subtype // "") as $st
+  | if $st == "init" then
+      (if ($ev.cwd | type) == "string" then .cwd = $ev.cwd else . end)
+      | emit("[run] claude \(safe_brief($ev.model // "?"; 40)) session \(safe($ev.session_id // "?") | .[0:8])")
+    elif $st == "can_use_tool" then
+      emit("[wait] permission: \(safe_brief($ev.tool_name // $ev.tool // "request"; 60))")
+    elif $st == "task_summary" then
+      (safe_brief($ev.detail // ""; 120)) as $d
+      | if $d == "" then . else emit("[step] \($d)") end
+    elif $st == "post_turn_summary" then
+      (safe_brief($ev.status_detail // ""; 200)) as $d
+      | (safe_brief($ev.needs_action // ""; 200)) as $need
+      | (if $d == "" then . else append("[note] summary: \($d)") end)
+      | (if $need == "" then . else append("[warn] needs action: \($need)") end)
+    elif $st == "task_started" then
+      emit("[note] subagent \(safe_brief($ev.subagent_type // "task"; 30)) started: \(safe_brief($ev.description // ""; 80))")
+    elif $st == "task_notification" then
+      emit("[note] subagent \(safe_brief($ev.status // "ended"; 20)): \(safe_brief($ev.summary // $ev.description // ""; 100))")
+    elif $st == "compact_boundary" then
+      emit("[note] context compacted (\(safe_brief($ev.compact_metadata.trigger // "auto"; 20)))")
+    elif (claude_system_quiet | index($st)) then .
+    else . end;
 
 def claude_event($ev):
   ($ev.type // "?") as $t
-  | if $t == "system" then
-      if ($ev.subtype // "") == "init" then
-        emit("[run] claude \(safe_brief($ev.model // "?"; 40)) session \(safe($ev.session_id // "?") | .[0:8])")
-      elif ($ev.subtype // "") == "can_use_tool" then
-        emit("[wait] permission: \(safe_brief($ev.tool_name // $ev.tool // "request"; 60))")
-      elif (claude_system_quiet | index($ev.subtype // "")) then
-        .
+  | if $t == "system" then claude_system($ev)
+    elif $t == "control_request" then
+      if ($ev.request.subtype // "") == "can_use_tool" then
+        (safe_brief($ev.request.decision_reason // ""; 80)) as $why
+        | emit("[wait] permission: \(safe_brief($ev.request.tool_name // "tool"; 40)) \(tool_args($ev.request.input; .cwd))"
+               + (if $why == "" then "" else " (\($why))" end))
       else . end
-    elif $t == "stream_event" then
-      .
     elif $t == "assistant" then
       ($ev.message.content // "") as $content
       | (if ($content | type) == "string" then [{type: "text", text: $content}]
          elif ($content | type) == "array" then $content
          else [] end) as $blocks
-      | reduce ($blocks | to_entries)[] as $b (
-          .;
-          ($b.value) as $c
-          | .out = ((.out // "") + claude_block_out($c))
-          | (if ($c.type // "") == "text" and (($c.text // "") | type) == "string" and $c.text != ""
-               then .last_text = $c.text
-             elif ($c.type // "") == "tool_use" and (($c.id // "") | type) == "string" and $c.id != ""
-               then .tools = (.tools + {($c.id): safe($c.name // "tool")})
-             else . end)
-          | (if (.out // "") != "" then .act = "emit" else . end))
+      | reduce $blocks[] as $c (.; claude_block($c))
     elif $t == "user" then
       ($ev.message.content // "") as $content
       | (if ($content | type) == "array" then $content else [] end) as $blocks
-      | reduce ($blocks | to_entries)[] as $b (
-          .;
-          ($b.value) as $c
-          | if ($c.type // "") == "tool_result"
-              then .out = ((.out // "") + claude_tool_result_out($c; .tools)) | .act = "emit"
-              else . end)
+      | ([$blocks[] | select((.type // "") == "tool_result")] | length) as $nres
+      | (if $nres == 1 and ($ev.tool_use_result | type) == "object" then $ev.tool_use_result else {} end) as $tur
+      | reduce $blocks[] as $c (.;
+          if ($c.type // "") == "tool_result" then claude_tool_result($c; $tur) else . end)
     elif $t == "result" then
       (if (($ev.result // "") | type) == "string" then $ev.result else "" end) as $txt
       | (if (($ev.is_error // false) or (($ev.subtype // "success") != "success")) then
@@ -231,6 +435,7 @@ def claude_event($ev):
       emit("[note] unhandled claude event type: \(safe_brief($t; 40))")
     end;
 
+# ---------------------------------------------------------------------- pi --
 def pi_event($ev):
   ($ev.type // "?") as $t
   | if $t == "session" then
@@ -263,17 +468,27 @@ def pi_event($ev):
           | .saw_delta = false
         else . end
     elif $t == "tool_execution_start" then
-      emit("[tool] \(safe_brief($ev.toolName // "tool"; 40)) \(tool_args($ev.args))")
+      (safe($ev.toolCallId // "")) as $id
+      | (if is_plan_tool($ev.toolName) then plan_items($ev.args) else null end) as $items
+      | if $items != null then
+          .plan_ids = (.plan_ids + {($id): true})
+          | .act = "emit" | .out = (if .mid then "\n" else "" end) | .mid = false
+          | set_todos($items)
+        else
+          emit("[tool] \(safe_brief($ev.toolName // "tool"; 40)) \(tool_args($ev.args))")
+        end
     elif $t == "tool_execution_end" then
-      (if ($ev.isError == true)
-        then emit("[error] \(safe_brief($ev.toolName // "tool"; 40)): \(tool_result($ev.result))")
-        else emit("[done] \(safe_brief($ev.toolName // "tool"; 40))") end)
+      (safe($ev.toolCallId // "")) as $id
+      | (if ($ev.isError == true)
+          then emit("[error] \(safe_brief($ev.toolName // "tool"; 40)): \(tool_result($ev.result))")
+          elif (.plan_ids[$id] // false) then .plan_ids = (.plan_ids | del(.[$id]))
+          else emit("[done] \(safe_brief($ev.toolName // "tool"; 40))") end)
     elif $t == "auto_retry_start" then
       emit("[wait] retry \(safe($ev.attempt))/\(safe($ev.maxAttempts)) in \(safe($ev.delayMs))ms: \(safe_brief($ev.errorMessage // ""; 120))")
     elif $t == "compaction_start" then
       emit("[wait] compacting context (\(safe_brief($ev.reason // "unknown"; 40)))")
     elif $t == "compaction_end" then
-      (if ($ev.aborted // false) then emit("[error] compaction aborted") else . end)
+      (if ($ev.aborted // false) then emit("[error] compaction aborted") else emit("[note] context compacted") end)
     elif $t == "agent_end" then
       (if ($ev.willRetry // false) then emit("[wait] retrying") else . end)
     elif $t == "summarization_retry_scheduled" then
@@ -284,7 +499,8 @@ def pi_event($ev):
       emit("[note] unhandled pi event type: \(safe_brief($t; 40))")
     end;
 
-# Cursor: *ToolCall nested object names the tool (readToolCall -> read).
+# ------------------------------------------------------------------ cursor --
+# *ToolCall nested object names the tool (readToolCall -> read).
 def cursor_tool_key($tc):
   if ($tc | type) != "object" then null
   else ([($tc | keys[]) | select(endswith("ToolCall"))] | first)
@@ -301,6 +517,12 @@ def cursor_tool_args($tc):
   | if $k == null then ""
     else tool_args($tc[$k].args // {})
     end;
+
+def cursor_plan_items($tc):
+  cursor_tool_key($tc) as $k
+  | if $k == null then null
+    elif is_plan_tool($k) then plan_items($tc[$k].args // {})
+    else null end;
 
 def cursor_tool_ok($tc):
   cursor_tool_key($tc) as $k
@@ -360,12 +582,19 @@ def cursor_event($ev):
     elif $t == "tool_call" then
       ($ev.tool_call // {}) as $tc
       | safe_brief(cursor_tool_name($tc); 40) as $name
+      | (safe($ev.call_id // $tc.toolCallId // "")) as $id
       | if ($ev.subtype // "") == "started" then
-          emit("[tool] \($name) \(cursor_tool_args($tc))")
+          cursor_plan_items($tc) as $items
+          | if $items != null then
+              .plan_ids = (.plan_ids + {($id): true})
+              | .act = "emit" | .out = (if .mid then "\n" else "" end) | .mid = false
+              | set_todos($items)
+            else emit("[tool] \($name) \(cursor_tool_args($tc))") end
         elif ($ev.subtype // "") == "completed" then
-          if cursor_tool_ok($tc)
-            then emit("[done] \($name)")
-            else emit("[error] \($name): \(cursor_tool_error($tc))")
+          if cursor_tool_ok($tc) then
+            (if (.plan_ids[$id] // false) then .plan_ids = (.plan_ids | del(.[$id]))
+             else emit("[done] \($name)") end)
+          else emit("[error] \($name): \(cursor_tool_error($tc))")
           end
         else . end
     elif $t == "result" then
@@ -391,6 +620,7 @@ def cursor_event($ev):
       emit("[note] unhandled cursor event type: \(safe_brief($t; 40))")
     end;
 
+# -------------------------------------------------------------------- grok --
 def grok_event($ev):
   ($ev.type // "?") as $t
   | if $t == "text" then
@@ -402,22 +632,206 @@ def grok_event($ev):
       (if ($ev.toolCallId | type) == "string" then $ev.toolCallId else "" end) as $id
       | safe_brief($ev.toolName // $ev.title // "tool"; 40) as $name
       | .tools = (if $id != "" then .tools + {($id): $name} else .tools end)
-      | emit("[tool] \($name) \(tool_args($ev.rawInput // {}))")
+      | (if is_plan_tool($ev.toolName // $ev.title) then plan_items($ev.rawInput // {}) else null end) as $items
+      | if $items != null then
+          .plan_ids = (.plan_ids + {($id): true})
+          | .act = "emit" | .out = (if .mid then "\n" else "" end) | .mid = false
+          | set_todos($items)
+        else emit("[tool] \($name) \(tool_args($ev.rawInput // {}))") end
     elif $t == "tool_call_update" then
       (if ($ev.toolCallId | type) == "string" then $ev.toolCallId else "" end) as $id
       | (.tools[$id] // "tool") as $name
       | if ($ev.status // "") == "completed" then
-          emit("[done] \($name)")
+          (if (.plan_ids[$id] // false) then .plan_ids = (.plan_ids | del(.[$id]))
+           else emit("[done] \($name)") end)
         elif ($ev.status // "") == "failed" then
           emit("[error] \($name): \(tool_result($ev.rawOutput // $ev.content))")
         else .
         end
     elif $t == "end" then
       emit("[run] result \(safe_brief($ev.stopReason // "end"; 40))")
+    elif $t == "plan" then
+      # Grok's streaming-json mirrors ACP session updates; a plan carries
+      # entries like ACP's. Not observed in a real stream.
+      (acp_plan_entries($ev.entries) // []) as $items
+      | if ($items | length) > 0 then set_todos($items) else . end
     elif (grok_quiet | index($t)) then
       .
     else
       emit("[note] unhandled grok event type: \(safe_brief($t; 40))")
+    end;
+
+# --------------------------------------------------------------------- acp --
+# Agent Client Protocol: newline-delimited JSON-RPC 2.0 on the agent's
+# stdout. Shapes come from the published @agentclientprotocol/sdk schemas
+# (schema/schema.json for protocol 1, schema/v2/schema.unstable.json for
+# protocol 2); both are handled by the same code because they differ in
+# kinds, not in framing:
+#
+#   notification  {"method":"session/update","params":{"sessionId","update":{"sessionUpdate":KIND,...}}}
+#     v1 kinds    agent_message_chunk, agent_thought_chunk, tool_call,
+#                 tool_call_update, plan {entries}, user_message_chunk,
+#                 available_commands_update, current_mode_update
+#     v2 kinds    agent_message, agent_thought, state_update
+#                 {state: running|idle|requires_action, stopReason?},
+#                 plan_update {plan:{type:items,entries}|{type:markdown}|{type:file}},
+#                 plan_removed, notice {severity,title,description},
+#                 compaction_update {status,summary,error}, subagent_update,
+#                 usage_update, session_info_update, terminal_*, session_message*
+#   request       {"id":N,"method":"session/request_permission","params":{...}}
+#                 v1 params.toolCall.title, v2 params.title / description
+#   response      {"id":N,"result":{...}}: initialize {protocolVersion,
+#                 agentInfo|info}, session/new {sessionId}, session/prompt
+#                 {stopReason} (v1) or {messageId} (v2, the stop reason
+#                 then arrives in the idle state_update)
+#
+# Responses carry no method, so the client's own requests are remembered
+# when they are in the stream (a dispatcher that logs both directions) and
+# recognised by their result keys otherwise.
+
+def acp_quiet_updates:
+  ["user_message_chunk", "user_message", "available_commands_update",
+   "current_mode_update", "config_option_update", "session_info_update",
+   "usage_update", "tool_call_content_chunk", "terminal_update",
+   "terminal_output_chunk", "compaction_summary_chunk", "session_message",
+   "session_message_chunk"];
+
+def acp_text($c):
+  if ($c | type) == "array" then as_text($c)
+  elif ($c | type) == "object" then
+    (if ($c.type // "") == "text" then ($c.text // "")
+     elif ($c.type // "") == "image" then "[image]"
+     elif ($c.type // "") == "resource_link" then ($c.uri // $c.name // "[resource]")
+     elif ($c.type // "") == "resource" then "[resource]"
+     else as_text($c) end)
+  else as_text($c) end
+  | if type == "string" then . else "" end;
+
+def acp_tool_label($u):
+  (safe_brief($u.title // ""; 80)) as $title
+  | if $title != "" then $title
+    else "\(safe_brief($u.name // $u.kind // "tool"; 40)) \(tool_args($u.rawInput // {}))" end;
+
+def acp_tool($u):
+  (safe($u.toolCallId // "")) as $id
+  | ($u.status // "") as $status
+  | if $id != "" and (.tools[$id] // null) == null then
+      # First sight of this call: that is its start, whatever the status.
+      (acp_tool_label($u)) as $label
+      | .tools = (.tools + {($id): ($label | .[0:40])})
+      | append("[tool] \($label)")
+      | (if $status == "completed" then append("[done] \(.tools[$id])")
+         elif $status == "failed" then append("[error] \(.tools[$id]): \(tool_result($u.rawOutput // $u.content))")
+         elif $status == "cancelled" then append("[error] \(.tools[$id]): cancelled")
+         else . end)
+    else
+      (.tools[$id] // "tool") as $name
+      | if $status == "completed" then append("[done] \($name)")
+        elif $status == "failed" then append("[error] \($name): \(tool_result($u.rawOutput // $u.content))")
+        elif $status == "cancelled" then append("[error] \($name): cancelled")
+        else . end
+    end;
+
+def acp_update($u):
+  ($u.sessionUpdate // "") as $k
+  | if $k == "agent_message_chunk" then
+      (acp_text($u.content) | clean) as $d
+      | if $d == "" then . else .saw_delta = true | .last_text = (.last_text + $d) | raw_after_think($d) end
+    elif $k == "agent_message" then
+      (acp_text($u.content) | clean) as $t
+      | if .saw_delta then .saw_delta = false
+        elif ($t | gsub("^\\s+|\\s+$"; "") | length) == 0 then .
+        else .last_text = $t | raw_after_think($t) end
+    elif $k == "agent_thought_chunk" then
+      think_delta(acp_text($u.content) | clean)
+    elif $k == "agent_thought" then
+      (acp_text($u.content) | clean) as $t
+      | if .thinking then .thinking = false
+        elif ($t | gsub("^\\s+|\\s+$"; "") | length) == 0 then .
+        else emit("[think]") | .out = (.out + ($t | sub("\n+$"; "")) + "\n") | .thinking = false end
+    elif $k == "tool_call" or $k == "tool_call_update" then
+      acp_tool($u)
+    elif $k == "plan" then
+      (acp_plan_entries($u.entries) // []) as $items
+      | if ($items | length) > 0 then set_todos($items) else . end
+    elif $k == "plan_update" then
+      ($u.plan // {}) as $p
+      | if ($p.entries | type) == "array" then
+          (acp_plan_entries($p.entries) // []) as $items
+          | if ($items | length) > 0 then set_todos($items) else . end
+        elif ($p.type // "") == "markdown" then
+          emit("[note] plan (markdown): \(safe_brief($p.content // ""; 120))")
+        elif ($p.type // "") == "file" then
+          emit("[note] plan file: \(safe_brief($p.uri // ""; 120))")
+        else . end
+    elif $k == "plan_removed" then
+      .todos = [] | emit("[note] plan removed")
+    elif $k == "state_update" then
+      ($u.state // "") as $s
+      | if $s == "requires_action" then emit("[wait] input: the agent needs your action")
+        elif $s == "idle" and ($u.stopReason | type) == "string" then
+          emit("[run] result \(safe_brief($u.stopReason; 40))")
+        else . end
+    elif $k == "notice" then
+      (safe_brief($u.title // ""; 80)) as $title
+      | (safe_brief($u.description // ""; 160)) as $desc
+      | ($title + (if $title != "" and $desc != "" then ": " else "" end) + $desc) as $msg
+      | if $msg == "" then .
+        elif ($u.severity // "") == "error" then emit("[error] \($msg)")
+        elif ($u.severity // "") == "warning" then emit("[warn] \($msg)")
+        else emit("[note] \($msg)") end
+    elif $k == "compaction_update" then
+      ($u.status // "") as $s
+      | if $s == "in_progress" then emit("[wait] compacting context")
+        elif $s == "completed" then emit("[note] context compacted")
+        elif $s == "failed" then emit("[error] compaction failed: \(safe_brief($u.error // ""; 120))")
+        elif $s == "cancelled" then emit("[note] compaction cancelled")
+        else . end
+    elif $k == "subagent_update" then
+      emit("[note] subagent \(safe_brief($u.state // "update"; 20)): \(safe_brief($u.title // $u.description // ""; 80))")
+    elif (acp_quiet_updates | index($k)) then .
+    else emit("[note] unhandled acp update: \(safe_brief($k; 40))")
+    end;
+
+def acp_rpc_id($ev):
+  if ($ev.id | type) == "string" or ($ev.id | type) == "number" then ($ev.id | tostring) else "" end;
+
+def acp_event($ev):
+  ($ev.method // "") as $m
+  | acp_rpc_id($ev) as $id
+  | if $m == "session/update" then
+      acp_update(if ($ev.params.update | type) == "object" then $ev.params.update else {} end)
+    elif $m == "session/request_permission" then
+      ($ev.params // {}) as $p
+      | (safe_brief($p.title // $p.toolCall.title // ""; 80)) as $title
+      | (safe_brief($p.description // ""; 100)) as $desc
+      | (if $title != "" then $title
+         else "\(safe_brief($p.toolCall.name // $p.subject.type // "request"; 40)) \(tool_args($p.toolCall.rawInput // {}))" end) as $what
+      | emit("[wait] permission: \($what)" + (if $desc == "" then "" else " (\($desc))" end))
+    elif $m == "session/cancel" then
+      emit("[note] cancel requested")
+    elif $m != "" and $id != "" then
+      # A request: the client's own (logged by a dispatcher) or the agent's
+      # (fs/*, terminal/*, elicitation/*). Remember the method for its reply.
+      ._rpc = ((.["_rpc"] // {}) + {($id): $m})
+    elif $m != "" then .
+    elif ($ev | has("result")) then
+      ($ev.result // {}) as $r
+      | ((.["_rpc"] // {})[$id] // "") as $method
+      | if $method == "initialize" or (($r | type) == "object" and ($r | has("protocolVersion"))) then
+          (safe_brief($r.info.name // $r.agentInfo.name // "agent"; 40)) as $name
+          | (safe_brief($r.info.version // $r.agentInfo.version // ""; 20)) as $ver
+          | ._acp_agent = $name
+          | emit("[note] acp agent \($name)\(if $ver == "" then "" else " " + $ver end) (protocol \(safe($r.protocolVersion // "?")))")
+        elif $method == "session/new" or (($r | type) == "object" and ($r | has("sessionId")) and (($r | has("stopReason")) | not)) then
+          emit("[run] acp \(.["_acp_agent"] // "agent") session \(safe($r.sessionId // "?") | .[0:8])")
+        elif ($r | type) == "object" and ($r.stopReason | type) == "string" then
+          emit("[run] result \(safe_brief($r.stopReason; 40))")
+        else . end
+    elif ($ev | has("error")) then
+      emit("[error] rpc \(safe($ev.error.code // "")): \(safe_brief($ev.error.message // "error"; 160))")
+    else
+      emit("[note] unhandled acp message")
     end;
 
 def handle($ev):
@@ -425,6 +839,7 @@ def handle($ev):
   elif $fmt == "claude-json" then claude_event($ev)
   elif $fmt == "cursor-json" then cursor_event($ev)
   elif $fmt == "grok-json" then grok_event($ev)
+  elif $fmt == "acp-json" then acp_event($ev)
   else . end;
 
 def mark_bad($why):
@@ -460,7 +875,7 @@ init_state
         end
     end;
     if $line == null then empty
-    elif .act == "emit" then .out
+    elif .act == "emit" and (.out // "") != "" then .out
     elif .act == "warn" then
       if .we == "invalid event shape" or .we == "non-object JSON event" then
         "[warn] skipped event near input line \(.wl): \(.we)\n"

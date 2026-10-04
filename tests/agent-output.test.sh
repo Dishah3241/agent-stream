@@ -180,6 +180,33 @@ fi
 grep -q '\[tool\] read X' "$RENDER_OUT" || fail "pi: sanitized toolName must remain readable"
 grep -q '\[wait\] compacting context (oversize)' "$RENDER_OUT" || fail "pi: sanitized reason must remain readable"
 
+# Generic plan heuristic (no Pi, Cursor, or Grok plan tool was observed; a
+# tool named like a plan whose arguments carry a list of items is shown as
+# the plan, anything else named like a plan stays an ordinary tool card).
+PI_PLAN='{"type":"tool_execution_start","toolCallId":"p1","toolName":"todo_write","args":{"todos":[{"content":"alpha","status":"in_progress"},{"content":"beta","status":"pending"}]}}
+{"type":"tool_execution_end","toolCallId":"p1","toolName":"todo_write","result":{"content":[{"type":"text","text":"SECRET-TODO-RESULT"}]},"isError":false}
+{"type":"tool_execution_start","toolCallId":"p2","toolName":"update_plan","args":{"plan":[{"step":"alpha","status":"completed"},{"step":"beta","status":"in_progress"},{"step":"gamma","status":"cancelled"}]}}
+{"type":"tool_execution_end","toolCallId":"p2","toolName":"update_plan","result":"ok","isError":false}
+{"type":"tool_execution_start","toolCallId":"p3","toolName":"plan_search","args":{"query":"x"}}
+{"type":"tool_execution_end","toolCallId":"p3","toolName":"plan_search","result":"ok","isError":false}
+{"type":"tool_execution_start","toolCallId":"p4","toolName":"todo_write","args":{"todos":[{"content":"alpha","status":"completed"}]}}
+{"type":"tool_execution_end","toolCallId":"p4","toolName":"todo_write","result":"boom","isError":true}
+'
+render pi-json "$PI_PLAN"
+expect_rc 0 "$RENDER_RC" "pi-json plan exit"
+grep -qx '\[todo\] 1/2 active alpha' "$RENDER_OUT" || fail "pi: todos args render as the plan"
+grep -qx '\[todo\] 2/2 pending beta' "$RENDER_OUT" || fail "pi: pending item"
+grep -qx '\[todo\] 1/3 done alpha' "$RENDER_OUT" || fail "pi: a plan of a new length is shown whole"
+grep -qx '\[todo\] 2/3 active beta' "$RENDER_OUT" || fail "pi: step field and in_progress status"
+grep -qx '\[todo\] 3/3 dropped gamma' "$RENDER_OUT" || fail "pi: cancelled is dropped"
+grep -q 'todo_write' "$RENDER_OUT" | grep -v error && fail "pi: a plan tool start is not a tool card"
+grep -q '^\[done\] todo_write' "$RENDER_OUT" && fail "pi: a plan tool end is not a done line"
+grep -q '^\[done\] update_plan' "$RENDER_OUT" && fail "pi: update_plan end is not a done line"
+grep -q 'SECRET-TODO-RESULT' "$RENDER_OUT" && fail "pi: plan tool results are never dumped"
+grep -qx '\[tool\] plan_search x' "$RENDER_OUT" || fail "pi: a plan-named tool without a list stays a tool card"
+grep -qx '\[done\] plan_search' "$RENDER_OUT" || fail "pi: and still closes"
+grep -q '\[error\] todo_write: boom' "$RENDER_OUT" || fail "pi: a failing plan tool is still an error"
+
 
 # -------------------------------------------------------------- claude-json
 
@@ -255,6 +282,90 @@ grep -q 'unhandled claude event type: rate_limit' "$RENDER_OUT" &&
   fail "claude: rate_limit_event must not emit an unknown-event notice"
 grep -q 'thinking_tokens' "$RENDER_OUT" && fail "claude: thinking_tokens must stay quiet"
 grep -q 'ok' "$RENDER_OUT" || fail "claude: text after rate_limit_event must still render"
+
+# Plans, waits, steps, and summaries. Shapes are scrubbed copies of a real
+# Claude Code 2.1 stream (TaskCreate / TaskUpdate / TaskList with their
+# tool_use_result, control_request can_use_tool, task_summary,
+# post_turn_summary, task_started / task_notification, permission_denials).
+CLAUDE_PLAN='{"type":"active_goal","value":null,"session_id":"s"}
+{"type":"autocompact_state","value":{"enabled":true,"threshold":1},"session_id":"s"}
+{"type":"system","subtype":"init","cwd":"/work/proj","session_id":"9a1b2c3d-4e5f-4a60-b1c2-d3e4f5a60719","model":"claude-sonnet-5-5","tools":["Bash","Read"]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"Read the README","description":"Read README.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"Task #1 created successfully: Read the README"}]},"tool_use_result":{"task":{"id":"1","subject":"Read the README"}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"TaskCreate","input":{"subject":"Count its lines","description":"Run wc"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c2","content":"Task #2 created successfully: Count its lines"}]},"tool_use_result":{"task":{"id":"2","subject":"Count its lines"}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"u1","name":"TaskUpdate","input":{"taskId":"1","status":"in_progress"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"u1","content":"Updated task #1 status"}]},"tool_use_result":{"success":true,"taskId":"1","updatedFields":["status"],"statusChange":{"from":"pending","to":"in_progress"}}}
+{"type":"system","subtype":"task_summary","detail":"Reading the README","session_id":"s"}
+{"type":"system","subtype":"task_summary","detail":null,"session_id":"s"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/work/proj/README.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"SECRET-README-BODY"}]},"tool_use_result":{"type":"text","file":{"filePath":"/work/proj/README.md","content":"SECRET-README-BODY"}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"u2","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"u2","content":"Updated task #1 status"}]},"tool_use_result":{"success":true,"taskId":"1","updatedFields":["status"],"statusChange":{"from":"in_progress","to":"completed"}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"l1","name":"TaskList","input":{}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"l1","content":"#1 [completed] Read the README"}]},"tool_use_result":{"tasks":[{"id":"1","subject":"Read the README","status":"completed","blockedBy":[]},{"id":"2","subject":"Count its lines","status":"in_progress","blockedBy":[]},{"id":"3","subject":"Report","status":"pending","blockedBy":[]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"u3","name":"TaskUpdate","input":{"taskId":"3","status":"deleted"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"u3","content":"Updated task #3 status"}]},"tool_use_result":{"success":true,"taskId":"3","updatedFields":["status"],"statusChange":{"from":"pending","to":"deleted"}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"u4","name":"TaskUpdate","input":{"taskId":"9","status":"completed"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"u4","is_error":true,"content":"Task #9 not found"}]}}
+{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/elsewhere/notes.txt","content":"SECRET-WRITE-CONTENT"},"description":"/elsewhere/notes.txt","decision_reason":"Path is outside allowed working directories","tool_use_id":"w1"}}
+{"type":"system","subtype":"post_turn_summary","summarizes_uuid":"x","status_category":"completed","status_detail":"README.md: 3 lines","needs_action":"approve the write","session_id":"s"}
+{"type":"system","subtype":"task_started","task_id":"t","tool_use_id":"a1","description":"List directory files","subagent_type":"Explore","prompt":"SECRET-SUBAGENT-PROMPT"}
+{"type":"user","message":{"content":"SECRET-SUBAGENT-PROMPT"},"parent_tool_use_id":"a1"}
+{"type":"system","subtype":"task_progress","task_id":"t","description":"Running ls","last_tool_name":"Bash","usage":{"total_tokens":1}}
+{"type":"system","subtype":"task_notification","task_id":"t","tool_use_id":"a1","status":"completed","summary":"Two entries found","output_file":"/x"}
+{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":5000,"num_turns":9,"result":"Done.","permission_denials":[{"tool_name":"Bash","tool_use_id":"d1","tool_input":{"command":"SECRET-DENIED-COMMAND"}}]}
+'
+render claude-json "$CLAUDE_PLAN"
+expect_rc 0 "$RENDER_RC" "claude-json plan exit"
+grep -q 'unhandled claude event type' "$RENDER_OUT" && fail "claude: active_goal / autocompact_state must stay quiet: $(grep unhandled "$RENDER_OUT")"
+grep -qx '\[todo\] 1/1 pending Read the README' "$RENDER_OUT" || fail "claude: TaskCreate must add a pending item when its result names the id"
+grep -qx '\[todo\] 2/2 pending Count its lines' "$RENDER_OUT" || fail "claude: a second TaskCreate appends (only the new item is shown)"
+grep -qx '\[todo\] 1/2 active Read the README' "$RENDER_OUT" || fail "claude: TaskUpdate in_progress marks the item active"
+grep -qx '\[step\] Reading the README' "$RENDER_OUT" || fail "claude: task_summary becomes a [step] line"
+[[ "$(grep -c '^\[step\]' "$RENDER_OUT")" -eq 1 ]] || fail "claude: a null task_summary detail emits nothing"
+grep -qx '\[tool\] Read README.md' "$RENDER_OUT" || fail "claude: paths are shown relative to the init cwd, got: $(grep '\[tool\] Read' "$RENDER_OUT")"
+grep -q 'SECRET-README-BODY' "$RENDER_OUT" && fail "claude: tool_use_result bodies must never be dumped"
+grep -qx '\[todo\] 1/2 done Read the README' "$RENDER_OUT" || fail "claude: TaskUpdate completed marks the item done"
+grep -qx '\[todo\] 2/3 active Count its lines' "$RENDER_OUT" || fail "claude: TaskList re-syncs the plan from tool_use_result.tasks"
+grep -qx '\[todo\] 3/3 pending Report' "$RENDER_OUT" || fail "claude: TaskList adds items created out of sight"
+grep -qx '\[todo\] 3/3 dropped Report' "$RENDER_OUT" || fail "claude: TaskUpdate deleted marks the item dropped"
+grep -q '\[error\] TaskUpdate: Task #9 not found' "$RENDER_OUT" || fail "claude: a failed plan update is an error line"
+grep -q '^\[tool\] Task' "$RENDER_OUT" && fail "claude: plan tools must not open tool cards: $(grep '^\[tool\] Task' "$RENDER_OUT")"
+grep -q '^\[done\] Task' "$RENDER_OUT" && fail "claude: plan tools must not close tool cards"
+grep -qx '\[wait\] permission: Write /elsewhere/notes.txt (Path is outside allowed working directories)' "$RENDER_OUT" || fail "claude: control_request can_use_tool is a permission wait with the reason, got: $(grep wait "$RENDER_OUT")"
+grep -q 'SECRET-WRITE-CONTENT' "$RENDER_OUT" && fail "claude: permission request payloads must never be dumped"
+grep -qx '\[note\] summary: README.md: 3 lines' "$RENDER_OUT" || fail "claude: post_turn_summary becomes a summary note"
+grep -qx '\[warn\] needs action: approve the write' "$RENDER_OUT" || fail "claude: needs_action becomes a warning"
+grep -qx '\[note\] subagent Explore started: List directory files' "$RENDER_OUT" || fail "claude: task_started names the subagent"
+grep -q 'SECRET-SUBAGENT-PROMPT' "$RENDER_OUT" && fail "claude: subagent prompts must never be printed"
+grep -q 'task_progress' "$RENDER_OUT" && fail "claude: task_progress stays quiet"
+grep -qx '\[note\] subagent completed: Two entries found' "$RENDER_OUT" || fail "claude: task_notification reports the subagent outcome"
+grep -qx '\[note\] context compacted (auto)' "$RENDER_OUT" || fail "claude: compact_boundary is reported"
+grep -qx '\[run\] result success (5000ms, 9 turns, 1 denied)' "$RENDER_OUT" || fail "claude: denied permissions are counted in the result line, got: $(grep result "$RENDER_OUT")"
+grep -q 'SECRET-DENIED-COMMAND' "$RENDER_OUT" && fail "claude: denied tool inputs must never be dumped"
+
+# TodoWrite (older Claude Code builds): the whole list on every call, so
+# only changed items are shown after the first; never a tool card.
+CLAUDE_TODOWRITE='{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"TodoWrite","input":{"todos":[{"content":"Read it","status":"in_progress","activeForm":"Reading it"},{"content":"Fix it","status":"pending","activeForm":"Fixing it"}]}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"Todos have been modified successfully"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w2","name":"TodoWrite","input":{"todos":[{"content":"Read it","status":"completed","activeForm":"Reading it"},{"content":"Fix it","status":"in_progress","activeForm":"Fixing it"}]}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w2","content":"Todos have been modified successfully"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"ExitPlanMode","input":{"plan":"## Plan\nDo the thing"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"p1","content":"approved"}]}}
+'
+render claude-json "$CLAUDE_TODOWRITE"
+expect_rc 0 "$RENDER_RC" "claude-json TodoWrite exit"
+grep -qx '\[todo\] 1/2 active Read it' "$RENDER_OUT" || fail "claude: TodoWrite in_progress is active"
+grep -qx '\[todo\] 2/2 pending Fix it' "$RENDER_OUT" || fail "claude: TodoWrite pending stays pending"
+grep -qx '\[todo\] 1/2 done Read it' "$RENDER_OUT" || fail "claude: TodoWrite completed is done"
+grep -qx '\[todo\] 2/2 active Fix it' "$RENDER_OUT" || fail "claude: TodoWrite second call shows the newly active item"
+[[ "$(grep -c '^\[todo\]' "$RENDER_OUT")" -eq 4 ]] || fail "claude: a repeated whole list emits only the changed items (got $(grep -c '^\[todo\]' "$RENDER_OUT"))"
+grep -q 'Reading it' "$RENDER_OUT" && fail "claude: activeForm is not shown"
+grep -q 'TodoWrite' "$RENDER_OUT" && fail "claude: TodoWrite never appears as a tool card"
+grep -q '^\[tool\] ExitPlanMode' "$RENDER_OUT" || fail "claude: a plan that is not a list stays an ordinary tool card"
+grep -q '^\[done\] ExitPlanMode' "$RENDER_OUT" || fail "claude: ordinary tool cards still close"
 
 
 # ------------------------------------------------------------- cursor-json
@@ -338,6 +449,25 @@ GROK_FAIL='{"type":"tool_call","toolCallId":"t9","toolName":"read_file","rawInpu
 render grok-json "$GROK_FAIL"
 expect_rc 0 "$RENDER_RC" "grok-json failed tool exit"
 grep -q '\[error\] read_file: not found' "$RENDER_OUT" || fail "grok: failed tool_call_update must be [error]"
+
+GROK_PLAN='{"type":"tool_call","toolCallId":"g1","title":"todo_write","toolName":"todo_write","rawInput":{"todos":[{"text":"g-one","status":"done"},{"text":"g-two","status":"todo"}]},"status":"pending","content":[]}
+{"type":"tool_call_update","toolCallId":"g1","status":"completed","rawOutput":{"SECRET":"GROK-PLAN-OUTPUT"},"content":[]}
+'
+render grok-json "$GROK_PLAN"
+expect_rc 0 "$RENDER_RC" "grok-json plan exit"
+grep -qx '\[todo\] 1/2 done g-one' "$RENDER_OUT" || fail "grok: rawInput todos render as the plan"
+grep -qx '\[todo\] 2/2 pending g-two' "$RENDER_OUT" || fail "grok: an unknown status word is pending"
+grep -q '^\[done\] todo_write' "$RENDER_OUT" && fail "grok: a plan tool completion is not a done line"
+grep -q 'GROK-PLAN-OUTPUT' "$RENDER_OUT" && fail "grok: plan tool output is never dumped"
+
+CURSOR_PLAN='{"type":"tool_call","subtype":"started","call_id":"c9","tool_call":{"toolCallId":"c9","updateTodosToolCall":{"args":{"todos":[{"content":"one","status":"pending"}]}}},"session_id":"a","timestamp_ms":1}
+{"type":"tool_call","subtype":"completed","call_id":"c9","tool_call":{"toolCallId":"c9","updateTodosToolCall":{"args":{"todos":[{"content":"one","status":"pending"}]},"result":{"success":{"SECRET":"CURSOR-PLAN-OUTPUT"}}}},"session_id":"a","timestamp_ms":2}
+'
+render cursor-json "$CURSOR_PLAN"
+expect_rc 0 "$RENDER_RC" "cursor-json plan exit"
+grep -qx '\[todo\] 1/1 pending one' "$RENDER_OUT" || fail "cursor: a *Todos*ToolCall renders as the plan"
+grep -q '^\[done\] updateTodos' "$RENDER_OUT" && fail "cursor: a plan tool completion is not a done line"
+grep -q 'CURSOR-PLAN-OUTPUT' "$RENDER_OUT" && fail "cursor: plan tool output is never dumped"
 
 
 # ------------------------------------------------ streaming and robustness

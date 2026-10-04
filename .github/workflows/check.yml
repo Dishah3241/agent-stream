@@ -28,11 +28,16 @@ jobs:
 
       - name: Syntax-check all scripts
         run: |
-          for f in lib/*.sh tests/*.sh tests/fixtures/agent-present/*.sh; do bash -n "$f"; done
+          for f in lib/*.sh bin/agent-stream tests/*.sh tests/fixtures/agent-present/*.sh; do bash -n "$f"; done
 
       - name: Tests
         run: |
           for t in tests/*.test.sh; do bash "$t"; done
 
+      - name: Preview renders without a terminal
+        run: |
+          AGENT_RUN_COLOR=never tests/fixtures/agent-present/preview.sh >/dev/null
+          TERM=dumb tests/fixtures/agent-present/preview.sh >/dev/null
+
       - name: Shellcheck (errors only)
-        run: shellcheck -S error lib/*.sh tests/*.sh tests/fixtures/agent-present/*.sh
+        run: shellcheck -S error lib/*.sh bin/agent-stream tests/*.sh tests/fixtures/agent-present/*.sh
