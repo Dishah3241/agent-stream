@@ -1,0 +1,38 @@
+name: check
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the system Bash for scripts and their children
+        run: |
+          mkdir -p "$RUNNER_TEMP/system-bash"
+          ln -s /bin/bash "$RUNNER_TEMP/system-bash/bash"
+          echo "$RUNNER_TEMP/system-bash" >> "$GITHUB_PATH"
+
+      - name: Install Linux verification tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq shellcheck >/dev/null
+
+      - name: Install Mac verification tools
+        if: runner.os == 'macOS'
+        run: brew install jq shellcheck
+
+      - name: Syntax-check all scripts
+        run: |
+          for f in lib/*.sh tests/*.sh tests/fixtures/agent-present/*.sh; do bash -n "$f"; done
+
+      - name: Tests
+        run: |
+          for t in tests/*.test.sh; do bash "$t"; done
+
+      - name: Shellcheck (errors only)
+        run: shellcheck -S error lib/*.sh tests/*.sh tests/fixtures/agent-present/*.sh
