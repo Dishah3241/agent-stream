@@ -7,6 +7,11 @@
 #   agent-stream state RECORD_DIR [--rebuild]
 #   agent-stream render FORMAT        < events  > activity lines
 #   agent-stream present              < activity lines
+#   agent-stream watch [--ascii] [--once] [ROOT_OR_RECORD...]
+#                                     the Bubble Tea watcher over the records
+#   agent-stream board [BOARD_JSON] [watcher flags]
+#                                     the watcher over every machine in
+#                                     board.json, read over SSH
 #   agent-stream acp-bridge --task T [--cwd D] -- acp-agent argv...
 #   agent-stream help
 #
@@ -14,7 +19,8 @@
 #   --agent NAME     claude | pi | cursor | grok | codex | opencode | acp
 #                    picks the stream format and a default worker command;
 #                    acp needs the agent command after -- and drives it
-#                    through the built-in ACP client (see acp-bridge)
+#                    through the built-in ACP client, protocol 2 by default
+#                    (see acp-bridge)
 #   --format FORMAT  claude-json | pi-json | cursor-json | grok-json | acp-json | text
 #   --task TEXT      the task, saved in full, shown shortened
 #   --task-file F    read the task from a file ("-" for stdin)
@@ -25,6 +31,9 @@
 #                    AGENT_STREAM_HOME defaults to ~/.agent-stream)
 #   --id ID          record id (default: UTC timestamp plus random suffix)
 #   --label TEXT     short label for the run (default: first line of the task)
+#   --parent DIR     the record of the run that started this one (default:
+#                    $AGENT_STREAM_PARENT, which every run exports to its
+#                    worker, so a nested agent-stream run finds its parent)
 #
 # Exit status: the worker's. Bash 3.2 compatible; needs jq.
 set -u
@@ -64,18 +73,22 @@ as_format_for_agent() {
 #                         [--permission allow|deny] [--protocol-version N]
 #                         -- agent argv...
 #
-# A minimal Agent Client Protocol client that drives an ACP agent for one
-# prompt and relays the agent's stdout line for line, so the capture layer
-# sees the raw JSON-RPC stream and renders it with the acp-json format. It
-# sends initialize, session/new, and session/prompt, answers
-# session/request_permission (allow by default: the first allow_once or
-# allow_always option; AGENT_STREAM_ACP_PERMISSION=deny picks a reject
-# option), declines fs/terminal/elicitation requests with a JSON-RPC error
-# because it declares no such capabilities, and closes the agent's stdin
-# when the turn ends: the session/prompt response under protocol 1, the
-# idle state_update under protocol 2. An agent that does not exit within
-# AGENT_STREAM_ACP_GRACE seconds (default 10) is terminated. The bridge
-# exits with the agent's status.
+# A minimal Agent Client Protocol client built on protocol 2: it offers
+# protocolVersion 2 in initialize (AGENT_STREAM_ACP_VERSION or
+# --protocol-version picks another) and speaks whatever version the agent
+# answers, so a protocol 1 agent still works. It relays the agent's stdout
+# line for line, so the capture layer sees the raw JSON-RPC stream and
+# renders it with the acp-json format. It sends initialize, session/new,
+# and session/prompt, answers session/request_permission (allow by default:
+# the first allow_once or allow_always option; AGENT_STREAM_ACP_PERMISSION=deny
+# picks a reject option), declines fs/terminal/elicitation requests with a
+# JSON-RPC error because it declares no such capabilities, and closes the
+# agent's stdin when the turn ends: under protocol 2 the idle state_update
+# that carries a stopReason, or any idle after the turn was seen running
+# (the schema lets stopReason be null); under protocol 1 the session/prompt
+# response. An agent that does not exit within AGENT_STREAM_ACP_GRACE
+# seconds (default 10) is terminated. The bridge exits with the agent's
+# status.
 as_acp_send() { printf '%s\n' "$1" >&3; }
 
 as_acp_classify() {
@@ -113,7 +126,7 @@ as_acp_pick_option() {
 
 as_cmd_acp_bridge() {
   local task="" task_file="" cwd="$PWD" perm="${AGENT_STREAM_ACP_PERMISSION:-allow}"
-  local proto="${AGENT_STREAM_ACP_VERSION:-1}" grace="${AGENT_STREAM_ACP_GRACE:-10}"
+  local proto="${AGENT_STREAM_ACP_VERSION:-2}" grace="${AGENT_STREAM_ACP_GRACE:-10}"
   local -a argv
   argv=()
   while [[ $# -gt 0 ]]; do
@@ -132,10 +145,10 @@ as_cmd_acp_bridge() {
   fi
   [[ -n "$task" ]] || as_die "acp-bridge needs --task"
   [[ "${#argv[@]}" -gt 0 ]] || as_die "acp-bridge needs the agent command after --"
-  case "$proto" in ''|*[!0-9]*) proto=1 ;; esac
+  case "$proto" in ''|*[!0-9]*) proto=2 ;; esac
   case "$grace" in ''|*[!0-9]*) grace=10 ;; esac
   local tmp in out agent_pid status=1 line row kind id method opts pv sid stop
-  local session="" negotiated="$proto" prompted=0 finishing=0 deadline=0 rc opt
+  local session="" negotiated="$proto" prompted=0 ran=0 finishing=0 deadline=0 rc opt
   tmp="$(mktemp -d)" || as_die "cannot create a temp dir"
   in="$tmp/in.fifo"; out="$tmp/out.fifo"
   mkfifo "$in" "$out" || as_die "cannot create fifos"
@@ -204,7 +217,8 @@ as_cmd_acp_bridge() {
         fi ;;
       state)
         method="${row%%$'\t'*}"; row="${row#*$'\t'}"; stop="${row%%$'\t'*}"
-        if (( prompted )) && [[ "$method" == idle && -n "$stop" ]] && (( ! finishing )); then
+        if (( prompted )) && [[ "$method" == running ]]; then ran=1; fi
+        if (( prompted && ! finishing )) && [[ "$method" == idle ]] && { [[ -n "$stop" ]] || (( ran )); }; then
           finishing=1; deadline=$((SECONDS + grace)); exec 3>&-
         fi ;;
       request)
@@ -277,7 +291,7 @@ as_acp_wrap() {
 
 as_cmd_run() {
   local agent="" format="" task="" task_file="" project="" cwd="" model=""
-  local dir="" id="" label="" have_argv=0 home top branch
+  local dir="" id="" label="" parent="${AGENT_STREAM_PARENT:-}" have_argv=0 home top branch
   AS_ARGV=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -291,6 +305,7 @@ as_cmd_run() {
       --dir) dir="${2:-}"; shift 2 ;;
       --id) id="${2:-}"; shift 2 ;;
       --label) label="${2:-}"; shift 2 ;;
+      --parent) parent="${2:-}"; shift 2 ;;
       --) shift; have_argv=1; AS_ARGV=("$@"); break ;;
       -h|--help) as_usage; return 0 ;;
       *) as_die "unknown run option: $1 (see agent-stream help)" ;;
@@ -320,6 +335,12 @@ as_cmd_run() {
   fi
   mkdir -p "$dir" || as_die "cannot create $dir"
   dir="$(cd "$dir" && pwd)"
+  # A parent is a record directory; anything else (or this run itself) is
+  # dropped rather than recorded wrong.
+  case "$parent" in
+    /*) [[ "$parent" != "$dir" ]] || parent="" ;;
+    *) parent="" ;;
+  esac
   if [[ -z "$project" ]]; then
     top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
     project="$(basename "${top:-$cwd}")"
@@ -330,7 +351,7 @@ as_cmd_run() {
   [[ -n "$agent" ]] || agent="$(. "$AS_LIB/run-capture.sh"; run_capture_agent_for_format "$format")"
   jq -n --arg id "$id" --arg agent "$agent" --arg label "$label" --arg cwd "$cwd" \
         --arg dir "$dir" --arg model "$model" --arg project "$project" --arg branch "$branch" \
-        --arg task "$task" --arg format "$format" '
+        --arg task "$task" --arg format "$format" --arg parent "$parent" '
     {id: $id, agent: (if $agent == "" then null else $agent end),
      label: (if $label == "" then null else $label end),
      cwd: $cwd, dir: $dir,
@@ -338,13 +359,16 @@ as_cmd_run() {
      model_source: (if $model == "" then null else "agent-stream --model" end),
      project: $project, branch: (if $branch == "" then null else $branch end),
      task: (if $task == "" then null else $task end), format: $format,
+     parent: (if $parent == "" then null else $parent end),
      created: (now | todate)}' >"$dir/header.json" || as_die "cannot write header"
 
   (
     set +e
     run="$dir"
     lib="$AS_LIB"
-    export run
+    # The worker, and any agent-stream run it starts, sees this run as parent.
+    AGENT_STREAM_PARENT="$dir"
+    export run AGENT_STREAM_PARENT
     # shellcheck source=../lib/run-capture.sh
     . "$AS_LIB/run-capture.sh"
     run_capture_exec "$format" -- "${AS_ARGV[@]}"
@@ -352,6 +376,38 @@ as_cmd_run() {
     run_capture_write_marker "$dir/capture" "$capture"
     exit "$status"
   )
+}
+
+# agent-stream watch: exec the watcher binary: $AGENT_STREAM_WATCH when set,
+# else the one built from cmd/agent-stream-watch into bin/, else the one on
+# PATH. It only reads records.
+as_cmd_watch() {
+  local exe=""
+  if [[ -n "${AGENT_STREAM_WATCH:-}" ]]; then
+    [[ -x "$AGENT_STREAM_WATCH" ]] && exe="$AGENT_STREAM_WATCH"
+  elif [[ -x "$AS_ROOT/bin/agent-stream-watch" ]]; then
+    exe="$AS_ROOT/bin/agent-stream-watch"
+  elif command -v agent-stream-watch >/dev/null 2>&1; then
+    exe="$(command -v agent-stream-watch)"
+  fi
+  if [[ -z "$exe" ]]; then
+    {
+      printf 'agent-stream: the watcher is not built. It needs Go 1.24 or newer once, to build:\n'
+      printf '  (cd %s/cmd/agent-stream-watch && go build -o ../../bin/agent-stream-watch .)\n' "$AS_ROOT"
+      printf 'Without it, follow one run with: agent-stream follow RECORD_DIR\n'
+    } >&2
+    exit 127
+  fi
+  exec "$exe" "$@"
+}
+
+# agent-stream board [BOARD_JSON] [watcher flags]: the watcher over every
+# machine in board.json (default ~/.config/agent-stream/board.json). It reads
+# each machine's records over one shared SSH connection and writes nothing.
+as_cmd_board() {
+  local file="${XDG_CONFIG_HOME:-$HOME/.config}/agent-stream/board.json"
+  if [[ $# -gt 0 && "$1" != -* ]]; then file="$1"; shift; fi
+  as_cmd_watch --board "$file" "$@"
 }
 
 as_record_dir() {
@@ -366,13 +422,23 @@ as_cmd_follow() {
   dir="$(as_record_dir "${1:-}")"
   # shellcheck source=../lib/agent-present.sh
   . "$AS_LIB/agent-present.sh"
-  run="$dir"
-  export run
+  # Style the replay the way the run's own project chose.
+  local pdir
+  pdir="$(jq -r '.project.dir // ""' "$dir/state.json" 2>/dev/null)" || pdir=""
+  if [[ -n "$pdir" && -d "$pdir" && -z "${AGENT_STREAM_PROJECT_DIR:-}" ]]; then
+    AGENT_STREAM_PROJECT_DIR="$pdir"
+    export AGENT_STREAM_PROJECT_DIR
+  fi
   if [[ -f "$dir/header.json" ]]; then agent_present_header <"$dir/header.json" || true; fi
   if [[ -s "$dir/state.json" ]] && jq -e '.status == "ended"' "$dir/state.json" >/dev/null 2>&1; then
-    agent_present_stream <"$dir/display.txt"
+    # A finished run replays without status cards (they would show the
+    # final state mid-replay) and without the [end] line, because the
+    # ending card below says the same thing once.
+    grep -v '^\[end\] ' "$dir/display.txt" | agent_present_stream
     agent_present_end <"$dir/state.json" || true
   else
+    run="$dir"
+    export run
     [[ -f "$dir/display.txt" ]] || as_die "no display.txt in $dir yet"
     tail -n +1 -f "$dir/display.txt" | agent_present_stream
   fi
@@ -402,6 +468,8 @@ case "${1:-help}" in
   acp-bridge) shift; as_cmd_acp_bridge "$@" ;;
   follow) shift; as_cmd_follow "$@" ;;
   state) shift; as_cmd_state "$@" ;;
+  watch) shift; as_cmd_watch "$@" ;;
+  board) shift; as_cmd_board "$@" ;;
   render) shift
     # shellcheck source=../lib/agent-output.sh
     . "$AS_LIB/agent-output.sh"; agent_output_render "$@" ;;

@@ -88,6 +88,10 @@ ended="$(printf '%s\n' '[run] result success (4210ms, 3 turns)' '[end] success e
 [[ "$(q "$ended" .outcome.exit)" == 0 ]] || fail "exit from the end line"
 [[ "$(q "$ended" .counts.turns)" == 3 ]] || fail "turns from the result line"
 [[ "$(q "$ended" .elapsed_s)" == 12 ]] || fail "elapsed from the end line"
+[[ "$(q "$ended" .counts.tokens)" == null ]] || fail "no token count unless the result line carries one"
+acpres="$(printf '%s\n' '[run] result end_turn (12400 tokens)' | agent_state_build)"
+[[ "$(q "$acpres" .counts.tokens)" == 12400 ]] || fail "tokens from an ACP v2 result line, got $(q "$acpres" .counts)"
+[[ "$(q "$acpres" .result.kind)" == success ]] || fail "end_turn with tokens is still a success"
 errres="$(printf '%s\n' '[error] result error_max_turns' '[run] result error_max_turns (10ms, 9 turns)' '[end] error exit 0 elapsed 1s record /r' | agent_state_build)"
 [[ "$(q "$errres" .outcome.kind)" == "error" ]] || fail "an error result with exit 0 is an error, got $(q "$errres" .outcome.kind)"
 [[ "$(q "$errres" .result.kind)" == "error" ]] || fail "result kind error"
@@ -159,5 +163,35 @@ end2="$(agent_state_finish "$R2" 0 complete)"
 [[ "$end2" == "[end] cancelled exit 0"* ]] || fail "a cancelled result with exit 0 is cancelled, got: $end2"
 [[ "$(jq -r .counts.tools "$R2/state.json")" == 1 ]] || fail "rebuilt state counts the tools"
 [[ "$(agent_state_outcome 0 "")" == "exited" ]] || fail "no result and exit 0 is merely exited"
+
+# ------------------------------------------------ Forge telemetry ----
+
+TEL="$(printf '%s\n' '[run] forge sim session s' '[stage] 1/4 load' '[metric] residual=0.5' \
+  '[metric] residual=0.25 m/s' '[metric] bad name=1' '[metric] x=abc' '[metric] =3' '[metric] y=.5e-3' \
+  '[stage] 2/4 mesh' '[metric] rate=1.5e3 items/s' '[stage] 3/4 integrate' '[stage] 9/4 nope' '[stage] 3/4 integrate twice' \
+  | agent_state_build)"
+[[ "$(q "$TEL" '.metrics.residual.value')" == "0.25" ]] || fail "the latest metric value"
+[[ "$(q "$TEL" '.metrics.residual.unit')" == "m/s" ]] || fail "the metric unit"
+[[ "$(q "$TEL" '.metrics.residual.n')" == 2 ]] || fail "the sample count"
+[[ "$(q "$TEL" '.metrics.residual.history | length')" == 2 ]] || fail "the samples are kept"
+[[ "$(q "$TEL" '.metrics.y.value')" == "0.0005" ]] || fail "exponent values parse"
+[[ "$(q "$TEL" '.metrics | keys | join(",")')" == "rate,residual,y" ]] || fail "malformed metrics are ignored, got $(q "$TEL" '.metrics | keys')"
+[[ "$(q "$TEL" '.counts.metrics')" == 4 ]] || fail "only well-formed samples are counted"
+[[ "$(q "$TEL" '.stages | length')" == 3 ]] || fail "three stages, the bad one ignored and the repeat merged"
+[[ "$(q "$TEL" '.stages[0].ended_s != null and .stages[1].ended_s != null and .stages[2].ended_s == null')" == true ]] \
+  || fail "a new stage ends the previous one"
+[[ "$(q "$TEL" '.stages[2].name')" == "integrate twice" ]] || fail "a repeated stage index updates its name"
+[[ "$(q "$TEL" '.stage | "\(.i)/\(.n) \(.name)"')" == "3/4 integrate twice" ]] || fail "the current stage"
+[[ "$(q "$TEL" '.progress | "\(.done)/\(.total) \(.source)"')" == "2/4 stages" ]] || fail "progress from stages"
+[[ "$(q "$TEL" '.eta_s')" == 0 ]] || fail "two stages done gives a forecast (zero elapsed here)"
+many="$(for i in $(seq 1 40); do printf '[metric] m%s=1\n' "$i"; done; for i in $(seq 1 70); do printf '[metric] m1=%s\n' "$i"; done)"
+MANY="$(printf '%s\n' "$many" | agent_state_build)"
+[[ "$(q "$MANY" '.metrics | length')" == 32 ]] || fail "at most 32 metric names"
+[[ "$(q "$MANY" '.metrics.m1.history | length')" == 60 ]] || fail "at most 60 samples per metric"
+[[ "$(q "$MANY" '.metrics.m1.value')" == 70 ]] || fail "the newest sample wins"
+PLANP="$(printf '%s\n' '[todo] 1/4 done a' '[todo] 2/4 done b' '[todo] 3/4 active c' '[todo] 4/4 pending d' | agent_state_build)"
+[[ "$(q "$PLANP" '.progress | "\(.done)/\(.total) \(.source)"')" == "2/4 plan" ]] || fail "progress from the plan without stages"
+ONE="$(printf '%s\n' '[todo] 1/4 done a' '[todo] 2/4 active b' | agent_state_build)"
+[[ "$(q "$ONE" '.eta_s')" == null ]] || fail "no forecast before two units finish"
 
 echo "agent-state test: all assertions passed"

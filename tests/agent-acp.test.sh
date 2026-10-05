@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Agent Client Protocol: the acp-json renderer over protocol 1 and v2
-# shapes taken from the published SDK schemas, and the bridge in
-# bin/agent-stream driving fake agents end to end (permission answers,
+# Agent Client Protocol: the acp-json renderer over protocol 2 (primary)
+# and protocol 1 shapes taken from the published SDK 1.7.0 schemas, and
+# the bridge in bin/agent-stream driving fake agents end to end (protocol 2
+# offered by default and a protocol 1 answer accepted, permission answers,
 # turn end under both protocols, grace kill, exit status).
 
 fail() { echo "agent-acp test: ${*:-assertion failed at line ${BASH_LINENO[0]}}" >&2; exit 1; }
@@ -77,22 +78,28 @@ ACP2='{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":2,"info":{"name":"fake
 {"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-v2-5678"}}
 {"jsonrpc":"2.0","id":3,"result":{"messageId":"m1"}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"state_update","state":"running"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_message_chunk","messageId":"m5","content":{"type":"text","text":"Looking around once."}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_thought_chunk","messageId":"th1","content":{"type":"text","text":"V2-THOUGHT-ONCE"}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p1","entries":[{"content":"Inspect","priority":"high","status":"in_progress"},{"content":"Report","priority":"low","status":"pending"}]}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","title":"List files","kind":"search","status":"in_progress","rawInput":{"command":"ls"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_thought","messageId":"th1","content":[{"type":"text","text":"V2-THOUGHT-ONCE"}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_message","messageId":"m5","content":[{"type":"text","text":"Looking around once."}]}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"tool_call_content_chunk","toolCallId":"t1","content":{"type":"content","content":{"type":"text","text":"SECRET-V2-CHUNK"}}}}}
-{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"notice","severity":"warning","title":"Rate limited","description":"retrying in 2s"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"notice","severity":"warning","title":"Rate limited, retrying in 2s"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"compaction_update","compactionId":"c1","status":"in_progress"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"compaction_summary_chunk","compactionId":"c1","content":{"type":"text","text":"SECRET-V2-SUMMARY"}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"compaction_update","compactionId":"c1","status":"completed","summary":"older turns folded"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","rawOutput":{"stdout":"SECRET-V2-RAW"}}}}
-{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"subagent_update","sessionId":"sub-1","state":"running","title":"Explore the tests"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"subagent_update","sessionId":"sub-1","state":{"state":"running"},"title":"Explore the tests"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"agent_message","messageId":"m2","content":[{"type":"text","text":"All done."}]}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"usage_update","used":1,"size":2}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"state_update","state":"requires_action"}}}
-{"jsonrpc":"2.0","id":200,"method":"session/request_permission","params":{"sessionId":"sess-v2-5678","title":"Write notes.txt","description":"outside the project","subject":{"type":"tool_call","toolCallId":"t2"},"options":[{"optionId":"a","name":"Allow","kind":"allow_once"}]}}
+{"jsonrpc":"2.0","id":200,"method":"session/request_permission","params":{"sessionId":"sess-v2-5678","title":"Write notes.txt","subject":{"type":"tool_call","toolCall":{"toolCallId":"t2","title":"Write notes.txt","kind":"edit","rawInput":{"path":"notes.txt","content":"SECRET-V2-PERMISSION-INPUT"}}},"options":[{"optionId":"a","name":"Allow","kind":"allow_once"}]}}
+{"jsonrpc":"2.0","id":201,"method":"session/request_permission","params":{"sessionId":"sess-v2-5678","title":"Run a command","subject":{"type":"command","command":"make test","cwd":"/work/proj"},"options":[{"optionId":"a","name":"Allow","kind":"allow_once"}]}}
+{"jsonrpc":"2.0","id":202,"method":"session/request_permission","params":{"sessionId":"sess-v2-5678","title":"","subject":{"type":"tool_call","toolCall":{"toolCallId":"t3","title":"Delete build/"}},"options":[{"optionId":"a","name":"Allow","kind":"allow_once"}]}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"plan_removed","planId":"p1"}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"mystery_update","SECRET":"V2-UNKNOWN"}}}
-{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn","usage":{"used":3}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-v2-5678","update":{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn","usage":{"totalTokens":12400,"inputTokens":11000,"outputTokens":1400}}}}
 {"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"boom"}}
 '
 render "$ACP2"
@@ -103,20 +110,25 @@ grep -q 'm1' "$RENDER_OUT" && fail "a v2 prompt response (messageId only) stays 
 grep -qx '\[todo\] 1/2 active Inspect' "$RENDER_OUT" || fail "v2 plan_update items render as todos"
 grep -qx '\[tool\] List files' "$RENDER_OUT" || fail "v2 tool_call_update first sight opens the card"
 grep -q 'SECRET-V2-CHUNK' "$RENDER_OUT" && fail "tool_call_content_chunk stays quiet"
-grep -qx '\[warn\] Rate limited: retrying in 2s' "$RENDER_OUT" || fail "notice warning"
+grep -qx '\[warn\] Rate limited, retrying in 2s' "$RENDER_OUT" || fail "notice warning (v2 notices carry a title only)"
 grep -qx '\[wait\] compacting context' "$RENDER_OUT" || fail "compaction in progress is a wait"
 grep -q 'SECRET-V2-SUMMARY' "$RENDER_OUT" && fail "compaction summary chunks stay quiet"
 grep -qx '\[note\] context compacted' "$RENDER_OUT" || fail "compaction completed"
 grep -qx '\[done\] List files' "$RENDER_OUT" || fail "v2 tool completed"
 grep -q 'SECRET-V2-RAW' "$RENDER_OUT" && fail "v2 rawOutput never dumped"
 grep -qx '\[note\] subagent running: Explore the tests' "$RENDER_OUT" || fail "subagent_update"
-grep -qx 'All done.' "$RENDER_OUT" || fail "v2 whole agent_message renders"
+grep -qx 'All done.' "$RENDER_OUT" || fail "v2 whole agent_message renders, also after an earlier message streamed as chunks"
+[[ "$(grep -c 'Looking around once.' "$RENDER_OUT")" == 1 ]] || fail "a whole v2 message whose messageId streamed as chunks is not repeated"
+[[ "$(grep -c 'V2-THOUGHT-ONCE' "$RENDER_OUT")" == 1 ]] || fail "a whole v2 thought whose messageId streamed as chunks is not repeated after a label line"
 grep -qx '\[wait\] input: the agent needs your action' "$RENDER_OUT" || fail "requires_action is a wait"
-grep -qx '\[wait\] permission: Write notes.txt (outside the project)' "$RENDER_OUT" || fail "v2 permission request uses title and description: $(grep permission "$RENDER_OUT")"
+grep -qx '\[wait\] permission: Write notes.txt' "$RENDER_OUT" || fail "v2 permission request uses the title: $(grep permission "$RENDER_OUT")"
+grep -qx '\[wait\] permission: Run a command (make test)' "$RENDER_OUT" || fail "v2 command subject shows the command: $(grep permission "$RENDER_OUT")"
+grep -qx '\[wait\] permission: Delete build/' "$RENDER_OUT" || fail "v2 empty title falls back to the subject tool call title: $(grep permission "$RENDER_OUT")"
+grep -q 'SECRET-V2-PERMISSION-INPUT' "$RENDER_OUT" && fail "permission subject payloads are never dumped"
 grep -qx '\[note\] plan removed' "$RENDER_OUT" || fail "plan_removed"
 grep -qx '\[note\] unhandled acp update: mystery_update' "$RENDER_OUT" || fail "unknown update kinds are named"
 grep -q 'V2-UNKNOWN' "$RENDER_OUT" && fail "unknown update payloads are not dumped"
-grep -qx '\[run\] result end_turn' "$RENDER_OUT" || fail "v2 idle state_update with stopReason ends the run"
+grep -qx '\[run\] result end_turn (12400 tokens)' "$RENDER_OUT" || fail "v2 idle state_update with stopReason ends the run and carries the token total: $(grep result "$RENDER_OUT")"
 grep -qx '\[error\] rpc -32603: boom' "$RENDER_OUT" || fail "error responses render"
 grep -q 'usage_update' "$RENDER_OUT" && fail "usage_update stays quiet"
 
@@ -136,6 +148,7 @@ st="$(agent_state_build <"$TMP/acp2.display")"
 [[ "$(jq -r '.todos | length' <<<"$st")" == 0 ]] || fail "plan removed clears the plan in the state"
 [[ "$(jq -r .result.kind <<<"$st")" == "success" ]] || fail "end_turn is a success result"
 [[ "$(jq -r .counts.tools <<<"$st")" == 1 ]] || fail "one tool"
+[[ "$(jq -r .counts.tokens <<<"$st")" == 12400 ]] || fail "state counts the v2 token total, got $(jq -c .counts <<<"$st")"
 
 # ------------------------------------------------------------- bridge ----
 
@@ -186,14 +199,21 @@ while IFS= read -r line; do
   method="$(printf '%s' "$line" | jq -r '.method // ""')"
   id="$(printf '%s' "$line" | jq -c '.id // empty')"
   case "$method" in
-    initialize) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":2,"info":{"name":"fake-acp2","version":"2.0"},"capabilities":{}}}\n' "$id" ;;
+    initialize)
+      printf '%s\n' "$line" | jq -r '"offered \(.params.protocolVersion) info \(.params.info.name)"' >>"$log"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":2,"info":{"name":"fake-acp2","version":"2.0"},"capabilities":{}}}\n' "$id" ;;
     session/new) printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"sess-v2-5678"}}\n' "$id" ;;
     session/prompt)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"messageId":"m1"}}\n' "$id"
       u '{"sessionUpdate":"state_update","state":"running"}'
+      u '{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"Inspecting.\n"}}'
       u '{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p1","entries":[{"content":"Inspect","priority":"high","status":"completed"}]}}'
       u '{"sessionUpdate":"agent_message","messageId":"m2","content":[{"type":"text","text":"All done."}]}'
-      u '{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}'
+      if [[ -n "${FAKE_ACP_NOSTOP:-}" ]]; then
+        u '{"sessionUpdate":"state_update","state":"idle","stopReason":null}'
+      else
+        u '{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn","usage":{"totalTokens":321,"inputTokens":300,"outputTokens":21}}'
+      fi
       if [[ -n "${FAKE_ACP_LINGER:-}" ]]; then
         while true; do sleep 1; done
       fi ;;
@@ -211,12 +231,12 @@ rc=0
 ( cd "$PROJ" && "$BIN" run --agent acp --task "Make the tests pass" --id acp1 -- "$TMP/fake-acp1" ) >"$TMP/pane1" 2>"$TMP/pane1-err" || rc=$?
 [[ "$rc" == 0 ]] || fail "bridge run must exit with the agent's status (0), got $rc: $(cat "$TMP/pane1-err")"
 REC="$TMP/home/runs/acp1"
-[[ "$(sed -n 1p "$FAKE_ACP_LOG")" == 1 ]] || fail "bridge sends protocolVersion 1 by default"
+[[ "$(sed -n 1p "$FAKE_ACP_LOG")" == 2 ]] || fail "bridge offers protocolVersion 2 by default, got $(sed -n 1p "$FAKE_ACP_LOG")"
 [[ "$(sed -n 2p "$FAKE_ACP_LOG")" == "$PROJ" ]] || fail "bridge sends the cwd in session/new, got $(sed -n 2p "$FAKE_ACP_LOG")"
 [[ "$(sed -n 3p "$FAKE_ACP_LOG")" == "Make the tests pass" ]] || fail "bridge sends the task as the prompt"
 [[ "$(sed -n 4p "$FAKE_ACP_LOG")" == "allow" ]] || fail "bridge allows by default (first allow option), got $(sed -n 4p "$FAKE_ACP_LOG")"
 [[ "$(sed -n 5p "$FAKE_ACP_LOG")" == "-32601" ]] || fail "bridge declines fs requests with a JSON-RPC error"
-[[ "$(sed -n 6p "$FAKE_ACP_LOG")" == "stdin-closed" ]] || fail "bridge closes the agent's stdin after the prompt response"
+[[ "$(sed -n 6p "$FAKE_ACP_LOG")" == "stdin-closed" ]] || fail "a protocol 1 answer is accepted: the bridge closes stdin after the prompt response"
 [[ "$(jq -r .format "$REC/header.json")" == "acp-json" ]] || fail "record format is acp-json"
 grep -qx '\[wait\] permission: Run `make test`' "$REC/display.txt" || fail "display carries the permission wait"
 grep -qx '\[todo\] 2/2 done Edit it' "$REC/display.txt" || fail "display carries the plan"
@@ -237,15 +257,33 @@ rc=0
 [[ "$(sed -n 4p "$FAKE_ACP_LOG")" == "reject" ]] || fail "deny policy picks the reject option, got $(sed -n 4p "$FAKE_ACP_LOG")"
 [[ "$(jq -r .outcome.kind "$TMP/home/runs/acp1b/state.json")" == "failed" ]] || fail "exit 7 is failed even after end_turn"
 
-# Protocol 2: the turn ends on the idle state_update.
+# An explicit protocol 1 offer still works.
+export FAKE_ACP_LOG="$TMP/acp1c.log"
+rc=0
+( cd "$PROJ" && AGENT_STREAM_ACP_VERSION=1 "$BIN" run --agent acp --task t --id acp1c -- "$TMP/fake-acp1" ) >/dev/null 2>&1 || rc=$?
+[[ "$rc" == 0 ]] || fail "protocol 1 offer run exit, got $rc"
+[[ "$(sed -n 1p "$FAKE_ACP_LOG")" == 1 ]] || fail "AGENT_STREAM_ACP_VERSION=1 offers protocol 1"
+
+# Protocol 2, the default: the turn ends on the idle state_update.
 export FAKE_ACP_LOG="$TMP/acp2.log"
 rc=0
-( cd "$PROJ" && AGENT_STREAM_ACP_VERSION=2 "$BIN" run --agent acp --task t --id acp2 -- "$TMP/fake-acp2" ) >"$TMP/pane2" 2>&1 || rc=$?
+( cd "$PROJ" && "$BIN" run --agent acp --task t --id acp2 -- "$TMP/fake-acp2" ) >"$TMP/pane2" 2>&1 || rc=$?
 [[ "$rc" == 0 ]] || fail "v2 bridge run exit, got $rc: $(cat "$TMP/pane2")"
-[[ "$(cat "$FAKE_ACP_LOG")" == "stdin-closed" ]] || fail "v2 bridge closes stdin after idle"
-grep -qx '\[run\] result end_turn' "$TMP/home/runs/acp2/display.txt" || fail "v2 idle stop reason recorded"
+[[ "$(sed -n 1p "$FAKE_ACP_LOG")" == "offered 2 info agent-stream" ]] || fail "v2 initialize carries protocolVersion 2 and info, got $(sed -n 1p "$FAKE_ACP_LOG")"
+[[ "$(sed -n 2p "$FAKE_ACP_LOG")" == "stdin-closed" ]] || fail "v2 bridge closes stdin after idle"
+grep -qx '\[run\] result end_turn (321 tokens)' "$TMP/home/runs/acp2/display.txt" || fail "v2 idle stop reason and tokens recorded"
+[[ "$(jq -r .counts.tokens "$TMP/home/runs/acp2/state.json")" == 321 ]] || fail "v2 tokens reach state.json"
 grep -qx 'All done.' "$TMP/home/runs/acp2/display.txt" || fail "v2 message recorded"
 [[ "$(jq -r .outcome.kind "$TMP/home/runs/acp2/state.json")" == "success" ]] || fail "v2 outcome success"
+
+# Protocol 2 lets an idle stopReason be null: an idle after running still
+# ends the turn, and the run ends as exited (no harness result), not hung.
+export FAKE_ACP_LOG="$TMP/acp2b.log"
+rc=0
+( cd "$PROJ" && FAKE_ACP_NOSTOP=1 "$BIN" run --agent acp --task t --id acp2b -- "$TMP/fake-acp2" ) >/dev/null 2>&1 || rc=$?
+[[ "$rc" == 0 ]] || fail "v2 null stopReason run exit, got $rc"
+[[ "$(sed -n 2p "$FAKE_ACP_LOG")" == "stdin-closed" ]] || fail "idle after running closes stdin even without a stopReason"
+[[ "$(jq -r .outcome.kind "$TMP/home/runs/acp2b/state.json")" == "exited" ]] || fail "no stop reason ends as exited, got $(jq -c .outcome "$TMP/home/runs/acp2b/state.json")"
 
 # An agent that ignores stdin EOF is terminated after the grace period.
 rc=0

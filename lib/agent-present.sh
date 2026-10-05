@@ -43,6 +43,11 @@ _AP_BEL=$'\007'
 _AP_CSI_FINALS='@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~'
 _AP_AS_SCALAR='if type == "string" or type == "number" or type == "boolean" then tostring else "" end'
 
+# Design files (themes/): words, glyphs, colors, backgrounds, gauges, and
+# eggs over the base look. See lib/agent-theme.sh.
+# shellcheck source=agent-theme.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agent-theme.sh"
+
 # _ap_style_init: set palette variables and marks from the environment. Runs
 # at the top of each public function, so callers may flip AGENT_RUN_COLOR
 # between calls.
@@ -96,6 +101,7 @@ _ap_style_init() {
   if (( _w > 120 )); then _w=120; fi
   _AP_WIDTH="$_w"
   _ap_repeat _AP_RULE "$_AP_H" "$_AP_WIDTH"
+  _ap_theme_apply
 }
 
 # _ap_repeat VAR CHAR COUNT: store CHAR repeated COUNT times in VAR (box
@@ -206,7 +212,9 @@ _ap_field() {
 _ap_count() {
   local n="$1"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  if [[ "$n" == 1 ]]; then printf '%s %s' "$n" "$2"; else printf '%s %ss' "$n" "$2"; fi
+  if [[ "$n" == 1 ]]; then printf '%s %s' "$n" "$2"
+  elif [[ "$2" == *[!aeiou]y ]]; then printf '%s %sies' "$n" "${2%y}"
+  else printf '%s %ss' "$n" "$2"; fi
 }
 
 # _ap_duration SECONDS: 42s, 3m12s, 1h02m. Non-numbers read as 0s.
@@ -281,14 +289,15 @@ _ap_todo_row() {
   pos="${rest%% *}"; rest="${rest#"$pos"}"; rest="${rest# }"
   status="${rest%% *}"; text="${rest#"$status"}"; text="${text# }"
   case "$status" in
-    done)    mark="$_AP_M_DONE" color="$_AP_OK" ;;
-    active)  mark="$_AP_M_HEAD" color="$_AP_HEAD" ;;
-    dropped) mark="$_AP_M_DROP" color="$_AP_DIM" ;;
-    pending) mark="$_AP_M_IDLE" color="$_AP_DIM" ;;
+    done)    mark="$_AP_G_LIT" color="$_AP_OK" ;;
+    active)  mark="$_AP_G_ACTIVE" color="$_AP_HEAD" ;;
+    dropped) mark="$_AP_G_DROP" color="$_AP_DIM" ;;
+    pending) mark="$_AP_G_PENDING" color="$_AP_DIM" ;;
     *)       mark="$_AP_M_UNK" color="$_AP_WARN"; text="$status $text"; status="" ;;
   esac
+  _ap_plan_note "$pos" "$status"
   if [[ "${_AP_PREV_TODO:-0}" != 1 ]]; then
-    printf -v body '%s%s plan%s' "$_AP_DIM" "$_AP_M_STEP" "$_AP_RESET"
+    printf -v body '%s%s %s%s' "$_AP_DIM" "$_AP_M_STEP" "$_AP_W_PLAN" "$_AP_RESET"
     _ap_divider "$body"
   fi
   case "$status" in
@@ -300,12 +309,50 @@ _ap_todo_row() {
   _AP_PREV_TODO=1
 }
 
+# _ap_plan_note POS STATUS: remember a plan item ("I/N") so the theme's
+# gauge can draw the whole plan when the block of plan rows ends.
+_ap_plan_note() {
+  local i="${1%%/*}" n="${1#*/}" k letter
+  case "$i$n" in ''|*[!0-9]*) return 0 ;; esac
+  (( i >= 1 && i <= n && n <= 500 )) || return 0
+  if [[ "$n" != "${_AP_PLAN_N:-0}" ]]; then
+    for (( k = ${_AP_PLAN_N:-0}; k < n; k++ )); do _AP_PLAN[k]=p; done
+    _AP_PLAN_N=$n
+  fi
+  case "$2" in done) letter=d ;; active) letter=a ;; dropped) letter=x ;; *) letter=p ;; esac
+  _AP_PLAN[i-1]=$letter
+  return 0
+}
+
+# _ap_plan_close: a block of plan rows has ended; a theme with a gauge
+# draws the plan's progress under it, like "│ ✦━━➤┈┈·  altitude 1/3".
+_ap_plan_close() {
+  local st='' k d=0 g
+  if [[ "${_AP_PREV_TODO:-0}" == 1 && -n "${_AP_GAUGE:-}" && "${_AP_PLAN_N:-0}" -gt 0 ]]; then
+    for (( k = 0; k < _AP_PLAN_N; k++ )); do
+      st="$st${_AP_PLAN[k]:-p}"
+      case "${_AP_PLAN[k]:-p}" in d|x) d=$((d + 1)) ;; esac
+    done
+    g="$(_ap_gauge "$st" 30)"
+    _ap_box_side "$g  $_AP_DIM$_AP_W_ALTITUDE $d/$_AP_PLAN_N$_AP_RESET"
+  fi
+  _AP_PREV_TODO=0
+}
+
+# _ap_egg_line ID: an easter egg as one extra dim side line, when on.
+_ap_egg_line() {
+  local e
+  e="$(_ap_egg "$1")"
+  [[ -z "$e" ]] || _ap_box_side "$_AP_EGGC$e$_AP_RESET"
+  return 0
+}
+
 _ap_emit_stream_line() {
-  local line rest name body kind
+  local line rest name body kind word
   line="$(_ap_sanitize "$1")"
   case "$line" in
     "[todo]"|"[todo] "*) ;;
-    *) _AP_PREV_TODO=0 ;;
+    *) _ap_plan_close ;;
   esac
   case "$line" in
     "[todo]"|"[todo] "*)
@@ -317,30 +364,56 @@ _ap_emit_stream_line() {
       kind="${rest%% *}"; kind="${kind%:}"
       rest="${rest#"${rest%% *}"}"; rest="${rest# }"
       if [[ -n "$kind" ]]; then
-        printf -v body '%s%s waiting%s %s(%s)%s %s' "$_AP_WARN" "$_AP_M_WAIT" "$_AP_RESET" "$_AP_DIM" "$kind" "$_AP_RESET" "$rest"
+        printf -v body '%s%s %s%s %s(%s)%s %s' "$_AP_WARN" "$_AP_M_WAIT" "$_AP_W_WAIT" "$_AP_RESET" "$_AP_DIM" "$kind" "$_AP_RESET" "$rest"
       else
-        printf -v body '%s%s waiting%s' "$_AP_WARN" "$_AP_M_WAIT" "$_AP_RESET"
+        printf -v body '%s%s %s%s' "$_AP_WARN" "$_AP_M_WAIT" "$_AP_W_WAIT" "$_AP_RESET"
+      fi
+      _ap_box_side "$body"
+      case "$kind" in
+        retry)
+          _AP_RETRIES=$(( ${_AP_RETRIES:-0} + 1 ))
+          if (( _AP_RETRIES == 3 )); then _ap_egg_line chaotic_era; fi ;;
+        compacting) _ap_egg_line spice ;;
+      esac
+      ;;
+    "[metric]"|"[metric] "*)
+      # Forge telemetry: "│ metric residual 0.0031 m/s". Only well-formed
+      # lines are styled; anything else is shown as the agent wrote it.
+      rest="${line#\[metric\]}"; rest="${rest# }"
+      name="${rest%%=*}"
+      kind="${rest#*=}"
+      if [[ "$rest" == *=* && "$name" =~ ^[A-Za-z0-9_.-]{1,40}$ && "${kind%% *}" =~ ^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$ ]]; then
+        word="${kind#"${kind%% *}"}"; word="${word# }"
+        printf -v body '%s%s%s %s %s%s%s%s' "$_AP_DIM" "$_AP_W_METRIC" "$_AP_RESET" "$name" "$_AP_TITLE" "${kind%% *}" "$_AP_RESET" "${word:+ $_AP_DIM$word$_AP_RESET}"
+      else
+        body="$line"
       fi
       _ap_box_side "$body"
       ;;
+    "[stage]"|"[stage] "*)
+      rest="${line#\[stage\]}"; rest="${rest# }"
+      printf -v body '%s%s %s%s %s' "$_AP_HEAD" "$_AP_G_ACTIVE" "$_AP_W_STAGE" "$_AP_RESET" "$rest"
+      _ap_divider "$body"
+      ;;
     "[step]"|"[step] "*)
       rest="${line#\[step\]}"; rest="${rest# }"
-      printf -v body '%snow%s %s' "$_AP_DIM" "$_AP_RESET" "$rest"
+      printf -v body '%s%s%s %s' "$_AP_DIM" "$_AP_W_STEP" "$_AP_RESET" "$rest"
       _ap_box_side "$body"
       ;;
     "[run] result "*)
       rest="${line#\[run\] result }"
       case "$rest" in
         success*|end_turn*|end*|stop*)
-          printf -v body '%s%s%s %sresult %s%s' "$_AP_OK" "$_AP_M_DONE" "$_AP_RESET" "$_AP_DIM" "$rest" "$_AP_RESET" ;;
+          printf -v body '%s%s%s %s%sresult %s%s' "$_AP_OK" "$_AP_M_DONE" "$_AP_RESET" "$_AP_DIM" "${_AP_W_RESULT_OK:+$_AP_W_RESULT_OK }" "$rest" "$_AP_RESET" ;;
         *)
           printf -v body '%s%s%s result %s' "$_AP_WARN" "$_AP_M_WARN" "$_AP_RESET" "$rest" ;;
       esac
       _ap_box_side "$body"
+      case "$rest" in *" denied)"*) _ap_egg_line three_laws ;; esac
       ;;
     "[run]"|"[run] "*)
       rest="${line#\[run\]}"; rest="${rest# }"
-      printf -v body '%srun %s%s' "$_AP_DIM" "$rest" "$_AP_RESET"
+      printf -v body '%s%s%s %s%s' "${_AP_G_LAUNCH:+$_AP_HEAD$_AP_G_LAUNCH$_AP_RESET }" "$_AP_DIM" "$_AP_W_RUN" "$rest" "$_AP_RESET"
       _ap_box_side "$body"
       ;;
     "[end]"|"[end] "*)
@@ -358,7 +431,7 @@ _ap_emit_stream_line() {
       rest="${line#\[tool\]}"; rest="${rest# }"
       if [[ -n "$rest" ]]; then
         name="${rest%% *}"
-        printf -v body '%s %s%s%s%s' "$_AP_M_STEP" "$_AP_DIM" "$name" "$_AP_RESET" "${rest#"$name"}"
+        printf -v body '%s %s%s%s%s%s' "$_AP_M_STEP" "$_AP_DIM" "${_AP_W_TOOL:+$_AP_W_TOOL }" "$name" "$_AP_RESET" "${rest#"$name"}"
       else
         body="$_AP_M_STEP"
       fi
@@ -366,30 +439,33 @@ _ap_emit_stream_line() {
       ;;
     "[done]"|"[done] "*)
       rest="${line#\[done\]}"; rest="${rest# }"
-      printf -v body '%s%s%s %s%s%s' "$_AP_OK" "$_AP_M_DONE" "$_AP_RESET" "$_AP_DIM" "$rest" "$_AP_RESET"
+      _AP_ERR_STREAK=0
+      printf -v body '%s%s%s %s%s%s%s' "$_AP_OK" "$_AP_M_DONE" "$_AP_RESET" "$_AP_DIM" "$rest" "${_AP_W_DONE:+ $_AP_W_DONE}" "$_AP_RESET"
       _ap_box_close "$body"
       ;;
     "[error]"|"[error] "*)
       rest="${line#\[error\]}"; rest="${rest# }"
-      printf -v body '%s%s%s %s%s%s' "$_AP_ERR" "$_AP_M_ERR" "$_AP_RESET" "$_AP_ERR" "$rest" "$_AP_RESET"
+      printf -v body '%s%s%s %s%s%s%s' "$_AP_ERR" "$_AP_M_ERR" "$_AP_RESET" "$_AP_ERR" "${_AP_W_ERROR:+$_AP_W_ERROR }" "$rest" "$_AP_RESET"
       _ap_box_close "$body"
+      _AP_ERR_STREAK=$(( ${_AP_ERR_STREAK:-0} + 1 ))
+      if (( _AP_ERR_STREAK == 3 )); then _ap_egg_line error_streak; fi
       ;;
     "[warn]"|"[warn] "*)
       rest="${line#\[warn\]}"; rest="${rest# }"
-      printf -v body '%s%s%s %s%s%s' "$_AP_WARN" "$_AP_M_WARN" "$_AP_RESET" "$_AP_WARN" "$rest" "$_AP_RESET"
+      printf -v body '%s%s%s %s%s%s%s' "$_AP_WARN" "$_AP_M_WARN" "$_AP_RESET" "$_AP_WARN" "${_AP_W_WARN:+$_AP_W_WARN }" "$rest" "$_AP_RESET"
       _ap_box_side "$body"
       ;;
     "[note]"|"[note] "*)
       rest="${line#\[note\]}"; rest="${rest# }"
-      printf -v body '%s%s%s' "$_AP_DIM" "$rest" "$_AP_RESET"
+      printf -v body '%s%s%s%s' "$_AP_DIM" "${_AP_W_NOTE:+$_AP_W_NOTE }" "$rest" "$_AP_RESET"
       _ap_box_side "$body"
       ;;
     "[think]"|"[think] "*)
       rest="${line#\[think\]}"; rest="${rest# }"
       if [[ -n "$rest" ]]; then
-        printf -v body '%s%s think%s %s' "$_AP_DIM" "$_AP_M_IDLE" "$_AP_RESET" "$rest"
+        printf -v body '%s%s %s%s %s' "$_AP_THINK" "$_AP_M_IDLE" "$_AP_W_THINK" "$_AP_RESET" "$rest"
       else
-        printf -v body '%s%s think%s' "$_AP_DIM" "$_AP_M_IDLE" "$_AP_RESET"
+        printf -v body '%s%s %s%s' "$_AP_THINK" "$_AP_M_IDLE" "$_AP_W_THINK" "$_AP_RESET"
       fi
       _ap_divider "$body"
       ;;
@@ -403,9 +479,9 @@ _ap_emit_stream_line() {
 # Hold only recognized label prefixes, not every "[" opener.
 _ap_label_hold() {
   case "$1" in
-    '['|'[t'|'[to'|'[too'|'[tool'|'[tod'|'[todo'|'[th'|'[thi'|'[thin'|'[think'|'[d'|'[do'|'[don'|'[done'|'[e'|'[er'|'[err'|'[erro'|'[error'|'[en'|'[end'|'[w'|'[wa'|'[war'|'[warn'|'[wai'|'[wait'|'[n'|'[no'|'[not'|'[note'|'[r'|'[ru'|'[run'|'[s'|'[st'|'[ste'|'[step')
+    '['|'[t'|'[to'|'[too'|'[tool'|'[tod'|'[todo'|'[th'|'[thi'|'[thin'|'[think'|'[d'|'[do'|'[don'|'[done'|'[e'|'[er'|'[err'|'[erro'|'[error'|'[en'|'[end'|'[w'|'[wa'|'[war'|'[warn'|'[wai'|'[wait'|'[n'|'[no'|'[not'|'[note'|'[r'|'[ru'|'[run'|'[s'|'[st'|'[ste'|'[step'|'[sta'|'[stag'|'[stage'|'[m'|'[me'|'[met'|'[metr'|'[metri'|'[metric')
       return 0 ;;
-    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*)
+    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*|'[metric]'*|'[stage]'*)
       return 0 ;;
   esac
   return 1
@@ -414,7 +490,7 @@ _ap_label_hold() {
 # _ap_is_label LINE: a complete line that the stream restyles.
 _ap_is_label() {
   case "$1" in
-    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*)
+    '[tool]'*|'[done]'*|'[error]'*|'[warn]'*|'[note]'*|'[think]'*|'[wait]'*|'[todo]'*|'[step]'*|'[run]'*|'[end]'*|'[metric]'*|'[stage]'*)
       return 0 ;;
   esac
   return 1
@@ -424,13 +500,13 @@ _ap_emit_plain() {
   if [[ -z "$1" ]]; then
     return 0
   fi
+  _ap_plan_close
   if _ap_has_unsafe "$1"; then
     _ap_sanitize "$1"
   else
     printf '%s' "$1"
   fi
   _AP_STREAM_STARTED=1
-  _AP_PREV_TODO=0
 }
 
 _ap_stream_flush_plain() {
@@ -517,9 +593,9 @@ _ap_stream_note() {
     printf 'agent-run %s streaming %s\n' "$AGENT_RUN_RUN" "$dest"
   fi
   if (( _AP_NOTE_LINES != 1 )); then
+    _ap_plan_close
     _ap_status_card
   fi
-  _AP_PREV_TODO=0
 }
 
 # ------------------------------------------------------------ pinned mode --
@@ -659,7 +735,7 @@ _ap_stream_putc() {
   if [[ "$c" == $'\n' ]]; then
     _ap_stream_flush_plain
     printf '\n'
-    _AP_PREV_TODO=0
+    _ap_plan_close
     _ap_stream_note
     _ap_pinned_draw
     return 0
@@ -690,6 +766,10 @@ agent_present_header() {
   branch="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.branch')")"
   task="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.task')")"
 
+  if [[ -n "${_AP_F_LAUNCH:-}" ]]; then
+    _ap_header_launch "$id" "$agent" "$project" "$branch" "${task:-$label}" "$cwd" "$dir" "$model_requested"
+    return 0
+  fi
   if [[ -n "$project" ]]; then title="$project${branch:+ ${_AP_SEP} $branch}"
   elif [[ -n "$label" ]]; then title="$label"
   else title="run $id"; fi
@@ -731,6 +811,7 @@ agent_present_stream() {
   _AP_STREAM_STARTED=0
   _AP_OPEN_CARDS=0
   _AP_PREV_TODO=0
+  _AP_PLAN=() _AP_PLAN_N=0 _AP_ERR_STREAK=0 _AP_RETRIES=0
   _AP_STREAM_HAD_OUTPUT=0
   _AP_STREAM_TRAILING_NEWLINE=1
   _ap_pinned_init
@@ -782,6 +863,7 @@ agent_present_stream() {
   fi
   _AP_ESC_BUF=""
   _ap_stream_flush_plain
+  _ap_plan_close
   _ap_pinned_exit
   return 0
 }
@@ -807,6 +889,13 @@ agent_present_end() {
   last_error="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.last_error // ""')")"
   dir="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.record.dir // ""')")"
   task="$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.task // ""')")"
+  if [[ -n "${_AP_F_REPORT:-}" ]]; then
+    _ap_end_report "$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.id // ""')")" \
+      "$(_ap_sanitize "$(_ap_scalar "$_AP_PAYLOAD" '.agent // ""')")" \
+      "$kind" "$exit_code" "$el" "$ndone" "$total" "$tools" "$errors" \
+      "$summary" "$last_error" "$dir" "$task"
+    return 0
+  fi
   case "$kind" in
     success)   word="done";      color="$_AP_OK";   mark="$_AP_M_DONE" ;;
     failed)    word="failed";    color="$_AP_ERR";  mark="$_AP_M_ERR" ;;

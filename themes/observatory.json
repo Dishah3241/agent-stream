@@ -1,0 +1,216 @@
+{
+  "schema": "agent-stream/theme/1",
+  "name": "observatory",
+  "description": "Forge: long exposures for long jobs. Star trails that grow with elapsed time, progress that develops like a photographic plate, dawn as the finish line.",
+  "colors": {
+    "accent": {
+      "hex": "#8FB8FF",
+      "ansi256": 111,
+      "ansi": 12
+    },
+    "dim": {
+      "faint": true
+    },
+    "ok": {
+      "hex": "#B8F2C8",
+      "ansi256": 157,
+      "ansi": 10
+    },
+    "warn": {
+      "hex": "#FFB000",
+      "ansi256": 214,
+      "ansi": 3
+    },
+    "err": {
+      "hex": "#FF6B6B",
+      "ansi256": 203,
+      "ansi": 9
+    },
+    "title": {
+      "hex": "#F4F1FF",
+      "ansi256": 255,
+      "ansi": 15,
+      "bold": true
+    },
+    "think": {
+      "hex": "#B39DDB",
+      "ansi256": 146,
+      "ansi": 5
+    },
+    "sky": {
+      "hex": "#4A5578",
+      "ansi256": 60,
+      "ansi": 8
+    },
+    "egg": {
+      "hex": "#FFD27F",
+      "ansi256": 222,
+      "ansi": 11
+    },
+    "ships": [
+      {
+        "hex": "#8FB8FF",
+        "ansi256": 111,
+        "ansi": 12
+      },
+      {
+        "hex": "#FFD27F",
+        "ansi256": 222,
+        "ansi": 11
+      },
+      {
+        "hex": "#B39DDB",
+        "ansi256": 146,
+        "ansi": 5
+      },
+      {
+        "hex": "#80DEEA",
+        "ansi256": 116,
+        "ansi": 14
+      },
+      {
+        "hex": "#F48FB1",
+        "ansi256": 218,
+        "ansi": 13
+      }
+    ]
+  },
+  "glyphs": {
+    "unicode": {
+      "active": "◎",
+      "lit": "✶",
+      "pending": "·",
+      "dropped": "×",
+      "launch": "◐",
+      "trail": "─",
+      "ahead": "┄",
+      "card_open": "╭",
+      "card_close": "╰",
+      "sky": ".·∙⋆✦",
+      "field": "·░▒▓█",
+      "orbit": "◴◷◶◵"
+    },
+    "ascii": {
+      "active": "o",
+      "lit": "*",
+      "pending": ".",
+      "dropped": "x",
+      "launch": "^",
+      "trail": "-",
+      "ahead": ".",
+      "card_open": "+",
+      "card_close": "+",
+      "sky": "",
+      "field": ".:-=#",
+      "orbit": "-\\|/"
+    }
+  },
+  "words": {
+    "tool": "exposure",
+    "done": "frame saved",
+    "error": "cloud cover",
+    "warn": "poor seeing",
+    "note": "",
+    "think": "calibrating",
+    "wait": "tracking",
+    "step": "now observing",
+    "plan": "observing plan",
+    "run": "dome open",
+    "result_ok": "plates developed",
+    "altitude": "developed",
+    "quiet": "no light for",
+    "fleet_title": "OBSERVATORY",
+    "report_title": "OBSERVING LOG",
+    "header": {
+      "task": "target",
+      "cwd": "site",
+      "agent": "telescope",
+      "output": "plates",
+      "liftoff": "dome open"
+    },
+    "states": {
+      "no_signal": "clouded out",
+      "dialing": "slewing",
+      "running": "observing",
+      "waiting": "tracking",
+      "starting": "cooling",
+      "success": "dawn",
+      "failed": "clouded out",
+      "error": "clouded out",
+      "cancelled": "dome closed",
+      "exited": "night over",
+      "ended": "night over",
+      "unknown": "no signal"
+    },
+    "report": {
+      "success": "DAWN: PLATES DEVELOPED",
+      "failed": "CLOUDED OUT",
+      "error": "CLOUDED OUT",
+      "cancelled": "DOME CLOSED",
+      "exited": "NIGHT OVER",
+      "ended": "NIGHT OVER"
+    },
+    "columns": {
+      "machine": "SITE",
+      "ship": "SCOPE",
+      "state": "SKY",
+      "project": "FIELD",
+      "agent": "INSTRUMENT",
+      "plan": "EXPOSURE",
+      "elapsed": "OPEN",
+      "now": "LOG"
+    },
+    "metric": "magnitude",
+    "stage": "exposure set",
+    "eta": "dawn in",
+    "heartbeat": "last light"
+  },
+  "background": {
+    "kind": "trails",
+    "density": 11
+  },
+  "gauge": "exposure",
+  "features": {
+    "callsigns": true,
+    "launch_header": true,
+    "mission_report": true,
+    "twinkle": true,
+    "holding_spinner": true
+  },
+  "callsigns": {
+    "names": [
+      "HALE",
+      "KECK",
+      "PALOMAR",
+      "LOWELL",
+      "YERKES",
+      "PARKES",
+      "LICK",
+      "SUBARU",
+      "GEMINI",
+      "VERA",
+      "MAUNA",
+      "CERRO"
+    ]
+  },
+  "eggs": {
+    "error_streak": "three clouds in a row: the universe flickers",
+    "answer_42": "42 frames: the answer, apparently",
+    "three_laws": "the Three Laws held at the dome",
+    "seldon_crisis": "the sky turned against the plan past the halfway mark",
+    "seldon_approves": "a long night, and the plates are clean",
+    "dark_forest": "dark forest",
+    "chaotic_era": "a chaotic era: three suns over the dome",
+    "bugs": "cloud after cloud, and the plates still came out",
+    "wallfacer": "Wallfacer: one scope, all night",
+    "fist_my_bump": "two scopes saw the same dawn",
+    "amaze": "a perfect night of seeing",
+    "sol": "night {sol}: still exposing",
+    "science_it": "had to calibrate the heck out of it",
+    "spice": "",
+    "litany": "the countdown on the wall",
+    "dead_channel": "all domes closed: a pale blue dot",
+    "midnight": "crossed midnight: Nightfall, and the stars came out",
+    "hyperspace": "WARP · the sky returns in a moment"
+  }
+}

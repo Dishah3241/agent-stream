@@ -1,0 +1,210 @@
+{
+  "schema": "agent-stream/theme/1",
+  "name": "radio",
+  "description": "Air: a warm morning broadcast. On-air red, VU meters that move with activity, the day as a show rundown, interviews as segments.",
+  "colors": {
+    "accent": {
+      "hex": "#FF4D4D",
+      "ansi256": 203,
+      "ansi": 9
+    },
+    "dim": {
+      "faint": true
+    },
+    "ok": {
+      "hex": "#7CFC8A",
+      "ansi256": 120,
+      "ansi": 10
+    },
+    "warn": {
+      "hex": "#FFC857",
+      "ansi256": 221,
+      "ansi": 11
+    },
+    "err": {
+      "hex": "#FF3B3B",
+      "ansi256": 196,
+      "ansi": 1
+    },
+    "title": {
+      "hex": "#FFF4DC",
+      "ansi256": 230,
+      "ansi": 15,
+      "bold": true
+    },
+    "think": {
+      "hex": "#C9A97B",
+      "ansi256": 180,
+      "ansi": 3
+    },
+    "sky": {
+      "hex": "#8A6F4E",
+      "ansi256": 94,
+      "ansi": 3
+    },
+    "egg": {
+      "hex": "#FF9F68",
+      "ansi256": 209,
+      "ansi": 9
+    },
+    "ships": [
+      {
+        "hex": "#FF9F68",
+        "ansi256": 209,
+        "ansi": 9
+      },
+      {
+        "hex": "#FFC857",
+        "ansi256": 221,
+        "ansi": 11
+      },
+      {
+        "hex": "#7CFC8A",
+        "ansi256": 120,
+        "ansi": 10
+      },
+      {
+        "hex": "#C9A97B",
+        "ansi256": 180,
+        "ansi": 3
+      },
+      {
+        "hex": "#FF4D4D",
+        "ansi256": 203,
+        "ansi": 9
+      }
+    ]
+  },
+  "glyphs": {
+    "unicode": {
+      "active": "●",
+      "lit": "♪",
+      "pending": "·",
+      "dropped": "×",
+      "launch": "◉",
+      "trail": "─",
+      "ahead": "·",
+      "card_open": "╭",
+      "card_close": "╰",
+      "sky": "▁",
+      "field": " ▁▂▃▄▅▆▇",
+      "orbit": "◐◓◑◒"
+    },
+    "ascii": {
+      "active": "*",
+      "lit": "~",
+      "pending": ".",
+      "dropped": "x",
+      "launch": "o",
+      "trail": "-",
+      "ahead": ".",
+      "card_open": "+",
+      "card_close": "+",
+      "sky": "",
+      "field": "",
+      "orbit": "-\\|/"
+    }
+  },
+  "words": {
+    "tool": "segment",
+    "done": "wrapped",
+    "error": "dead air",
+    "warn": "feedback",
+    "note": "",
+    "think": "on mute",
+    "wait": "holding for caller",
+    "step": "now playing",
+    "plan": "rundown",
+    "run": "on air",
+    "result_ok": "that's a wrap",
+    "altitude": "rundown",
+    "quiet": "dead air for",
+    "fleet_title": "ON AIR",
+    "report_title": "SHOW LOG",
+    "header": {
+      "task": "today's show",
+      "cwd": "studio",
+      "agent": "host",
+      "output": "tape",
+      "liftoff": "on air"
+    },
+    "states": {
+      "no_signal": "dead air",
+      "dialing": "tuning",
+      "running": "on air",
+      "waiting": "holding",
+      "starting": "mic check",
+      "success": "signed off",
+      "failed": "off the air",
+      "error": "off the air",
+      "cancelled": "pre-empted",
+      "exited": "signed off",
+      "ended": "off air",
+      "unknown": "static"
+    },
+    "report": {
+      "success": "SIGNING OFF",
+      "failed": "OFF THE AIR",
+      "error": "OFF THE AIR",
+      "cancelled": "PRE-EMPTED",
+      "exited": "SIGNED OFF",
+      "ended": "OFF AIR"
+    },
+    "columns": {
+      "machine": "STUDIO",
+      "ship": "STATION",
+      "state": "STATUS",
+      "project": "SHOW",
+      "agent": "HOST",
+      "plan": "RUNDOWN",
+      "elapsed": "AIRTIME",
+      "now": "NOW PLAYING"
+    },
+    "metric": "level",
+    "stage": "act",
+    "eta": "off air in",
+    "heartbeat": "last word"
+  },
+  "background": {
+    "kind": "meters",
+    "density": 2
+  },
+  "gauge": "trajectory",
+  "features": {
+    "callsigns": true,
+    "launch_header": true,
+    "mission_report": true,
+    "twinkle": false,
+    "holding_spinner": true
+  },
+  "callsigns": {
+    "names": [
+      "KAIR",
+      "WAIR",
+      "KMIC",
+      "WDAY",
+      "KREEL",
+      "WTAPE",
+      "KDIAL",
+      "WWAVE"
+    ]
+  },
+  "eggs": {
+    "error_streak": "dead air three times: don't panic",
+    "answer_42": "42 segments: the answer, apparently",
+    "dead_channel": "all stations silent: the sky above the port",
+    "dark_forest": "dark forest",
+    "wallfacer": "a one-host show, all morning",
+    "fist_my_bump": "simulcast: two shows signed off together",
+    "amaze": "a perfect show, not a second of dead air",
+    "seldon_crisis": "the show fell apart after the midpoint",
+    "seldon_approves": "an hour on air and still on schedule",
+    "bugs": "a rough show, but you stayed on air",
+    "litany": "SecUnit is watching its serials on hold",
+    "midnight": "the late-late show",
+    "hyperspace": "FREQUENCY HOP · back on air in a moment",
+    "sol": "day {sol} of the marathon broadcast",
+    "science_it": "had to retune the heck out of it",
+    "chaotic_era": "three dropouts: the signal is chaos"
+  }
+}

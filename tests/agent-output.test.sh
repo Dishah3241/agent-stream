@@ -669,4 +669,14 @@ grep -qx 'tokens used' <<<"$deduped" || fail "dedupe must keep the lines around 
 [[ "$(printf '%s\n' "$deduped" | grep -c 'only documentation file')" == 1 ]] || fail "dedupe must print the final answer once"
 rm -rf "$dedupe_run"
 
+# Forge telemetry is printed by the agent itself; every adapter passes the
+# lines through as their own lines so the presenter and tracker see them.
+render claude-json '{"type":"assistant","message":{"content":[{"type":"text","text":"Integrating.\n[stage] 3/7 integrate\n[metric] residual=0.0031\nStill going."}]}}
+'
+grep -qx '\[stage\] 3/7 integrate' "$RENDER_OUT" || fail "claude: a [stage] line in text stays a line"
+grep -qx '\[metric\] residual=0.0031' "$RENDER_OUT" || fail "claude: a [metric] line in text stays a line"
+render pi-json '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"[metric] rate=5 items/s\n"}}
+'
+grep -qx '\[metric\] rate=5 items/s' "$RENDER_OUT" || fail "pi: a [metric] delta stays a line"
+
 echo "agent-output test: all assertions passed"

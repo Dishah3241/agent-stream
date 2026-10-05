@@ -20,7 +20,7 @@ def init_state($seed):
     id: null, status: "starting",
     agent: null, model: null, model_requested: null, session: null,
     project: {name: null, dir: null, branch: null},
-    task: null,
+    task: null, parent: null,
     started_at: now_iso, updated_at: now_iso, ended_at: null, elapsed_s: 0,
     activity: {kind: "idle", text: null, since: now_iso},
     step: null,
@@ -28,7 +28,13 @@ def init_state($seed):
     todos: [],
     todo_counts: {total: 0, done: 0, active: 0, pending: 0, dropped: 0},
     counts: {tools: 0, tool_errors: 0, errors: 0, warnings: 0, notes: 0,
-             waits: 0, text_lines: 0, todo_updates: 0, turns: null},
+             waits: 0, text_lines: 0, todo_updates: 0, turns: null, tokens: null,
+             metrics: 0},
+    metrics: {},
+    stages: [],
+    stage: null,
+    progress: null,
+    eta_s: null,
     last_text: null, last_error: null, last_warning: null,
     result: null,
     outcome: null,
@@ -36,6 +42,11 @@ def init_state($seed):
   * (if ($seed | type) == "object" then $seed else {} end)
   | ._thinking = false | ._open = 0 | ._last_emit = 0 | ._dirty = true
   | ._prev_todo = false;
+
+# elapsed_now: seconds since the run started, at this moment.
+def elapsed_now:
+  if ._el_fixed == true then .elapsed_s
+  else ((now - ((.started_at | fromdate?) // now)) | floor) end;
 
 def touch: .updated_at = now_iso
   | if ._el_fixed == true then .
@@ -88,6 +99,58 @@ def apply_end($rest):
       | (if $m.el != null then .elapsed_s = ($m.el | tonumber) | ._el_fixed = true else . end)
     end;
 
+# [metric] NAME=VALUE [UNIT]: a number the agent's work produced. Names are
+# [A-Za-z0-9_.-]{1,40}, values must be numbers, at most 32 names per run;
+# anything else is ignored. Each name keeps its latest value, its unit, a
+# sample count, and the last 60 samples as [seconds since start, value].
+def apply_metric($rest):
+  (($rest | capture("^(?<name>[A-Za-z0-9_.-]{1,40})=(?<val>[-+]?([0-9]+\\.?[0-9]*|\\.[0-9]+)([eE][-+]?[0-9]+)?)(?: (?<unit>[^ ]{1,16}))?$")) // null) as $m
+  | if $m == null then .
+    elif (.metrics[$m.name] == null) and ((.metrics | length) >= 32) then .
+    else
+      ($m.val | tonumber) as $v
+      | (.metrics[$m.name] // {value: null, unit: null, n: 0, history: []}) as $old
+      | .metrics[$m.name] = {
+          value: $v,
+          unit: ($m.unit // $old.unit),
+          n: ($old.n + 1),
+          history: (($old.history + [[elapsed_now, $v]]) | .[-60:]) }
+      | .counts.metrics += 1
+    end;
+
+# [stage] I/N NAME: the stage of a multi-stage job. A new index ends the
+# previous stage; the timeline keeps when each began and ended.
+def apply_stage($rest):
+  (($rest | capture("^(?<i>[0-9]+)/(?<n>[0-9]+)(?: (?<name>.*))?$")) // null) as $m
+  | if $m == null then .
+    else
+      ($m.i | tonumber) as $i
+      | ($m.n | tonumber) as $n
+      | if $i < 1 or $i > $n or $n > 200 then .
+        else
+          elapsed_now as $t
+          | .stages = [.stages[] | if .ended_s == null and .i != $i then .ended_s = $t else . end]
+          | if ([.stages[] | select(.i == $i)] | length) > 0 then
+              .stages = [.stages[] | if .i == $i then .name = (($m.name // .name) | trim(80)) | .n = $n else . end]
+            else
+              .stages += [{i: $i, n: $n, name: (($m.name // "") | trim(80)), started_s: $t, ended_s: null}]
+            end
+          | .stages = (.stages | .[-200:])
+          | .stage = {i: $i, n: $n, name: (($m.name // "") | trim(80))}
+        end
+    end;
+
+# progress and eta_s: from stages when the run reports them, else from the
+# plan. The forecast is the elapsed time per finished unit times the units
+# left, and only once two units have finished.
+def update_progress:
+  (if .stage != null then {done: (.stage.i - 1), total: .stage.n, source: "stages"}
+   elif .todo_counts.total > 0 then {done: (.todo_counts.done + .todo_counts.dropped), total: .todo_counts.total, source: "plan"}
+   else null end) as $p
+  | .progress = $p
+  | .eta_s = (if $p != null and $p.done >= 2 and $p.done < $p.total and .status != "ended"
+              then ((.elapsed_s * ($p.total - $p.done) / $p.done) | floor) else null end);
+
 def apply_run($rest):
   if ($rest | startswith("result ")) then
     ($rest | ltrimstr("result ")) as $r
@@ -97,6 +160,8 @@ def apply_run($rest):
                         elif ($m.sub | test("cancel|abort|interrupt")) then "cancelled"
                         else "error" end)}
     | (if ($m.turns // "?") != "?" then .counts.turns = ($m.turns | tonumber) else . end)
+    | (($r | capture("[(, ](?<tok>[0-9]+) tokens[,)]") // {}).tok // null) as $tok
+    | (if $tok != null then .counts.tokens = ($tok | tonumber) else . end)
     | (if .status != "ended" then .status = "ended" | .ended_at = now_iso end)
     | .waiting = null
     | activity("done"; "result \($m.sub)")
@@ -110,7 +175,7 @@ def apply_run($rest):
   end;
 
 def apply_line($line):
-  (($line | capture("^\\[(?<label>run|tool|done|error|warn|note|think|wait|todo|step|end)\\](?: (?<rest>.*)|)$")) // null) as $m
+  (($line | capture("^\\[(?<label>run|tool|done|error|warn|note|think|wait|todo|step|end|metric|stage)\\](?: (?<rest>.*)|)$")) // null) as $m
   | if $m == null then
       # Plain text: assistant prose, or reasoning after a [think] line.
       if ($line | gsub("^\\s+|\\s+$"; "") | length) == 0 then .
@@ -156,9 +221,12 @@ def apply_line($line):
         elif $m.label == "step" then clear_wait | .step = ($rest | trim(160))
         elif $m.label == "run" then apply_run($rest)
         elif $m.label == "end" then apply_end($rest)
+        elif $m.label == "metric" then apply_metric($rest)
+        elif $m.label == "stage" then clear_wait | apply_stage($rest) | activity("stage"; ($rest | trim(120)))
         else . end
     end
-  | touch;
+  | touch
+  | update_progress;
 
 def snapshot:
   del(._thinking, ._open, ._last_emit, ._dirty, ._prev_todo, ._el_fixed, ._label, ._final);
@@ -170,7 +238,7 @@ init_state($seed)
     else
       ._dirty = true
       | apply_line($line)
-      | ._label = ($line | test("^\\[(run|tool|done|error|warn|note|wait|todo|step|end)\\]"))
+      | ._label = ($line | test("^\\[(run|tool|done|error|warn|note|wait|todo|step|end|metric|stage)\\]"))
     end;
     if ._final == true then snapshot
     elif $live != true then empty

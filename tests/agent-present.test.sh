@@ -26,6 +26,8 @@ trap 'rm -rf "$TMP"' EXIT
 # Default assertions run in a UTF-8, non-dumb terminal. Color stays off
 # unless a test opts in. An ambient NO_COLOR must not leak into opt-in tests.
 export AGENT_RUN_COLOR=never
+# These assertions pin the base look; tests/agent-theme.test.sh covers themes.
+export AGENT_STREAM_THEME=plain
 export TERM=xterm
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
@@ -589,6 +591,9 @@ run_out="$(printf '%s\n' '[run] claude claude-opus-5-5 session 3f9c2a71' '[run] 
 assert_has "$run_out" "│ run claude claude-opus-5-5 session 3f9c2a71"
 assert_has "$run_out" "│ ✓ result success (4210ms, 3 turns)"
 assert_has "$run_out" "│ ! result error_max_turns (1ms, 9 turns)"
+acp_out="$(printf '%s\n' '[run] result end_turn (12400 tokens)' '[run] result refusal (31 tokens)' | agent_present_stream)"
+assert_has "$acp_out" "│ ✓ result end_turn (12400 tokens)"
+assert_has "$acp_out" "│ ! result refusal (31 tokens)"
 run_color_out="$(run_color '[run] result success (1ms, 1 turns)' agent_present_stream)"
 assert_style "$run_color_out" 32
 
@@ -705,5 +710,16 @@ assert_lacks "$no_state" "── "
 pinned_pipe="$( (export AGENT_RUN_STATUS=pinned; printf '%s\n' '[tool] read a' '[done] read' | run="$SR" agent_present_stream) )"
 assert_no_ansi "$pinned_pipe"
 assert_has "$pinned_pipe" "✓ read"
+
+# Forge telemetry lines.
+tel_out="$(printf '%s\n' '[stage] 2/7 mesh' '[metric] residual=0.0031' '[metric] rate=1.5e3 items/s' '[metric] bogus line' | agent_present_stream)"
+assert_has "$tel_out" "── ▸ stage 2/7 mesh"
+assert_has "$tel_out" "│ metric residual 0.0031"
+assert_has "$tel_out" "│ metric rate 1.5e3 items/s"
+assert_has "$tel_out" "│ [metric] bogus line"
+held="$(printf '%s' '[metr' | agent_present_stream)"
+[[ "$held" == '[metr' ]] || fail "an unfinished [metric] prefix is held then printed as text, got: $held"
+tel_evil="$(printf '[metric] x=1 \033[31mred\n' | agent_present_stream)"
+assert_no_ansi "$tel_evil"
 
 echo "agent-present tests: all passed"

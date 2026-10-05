@@ -1,0 +1,205 @@
+{
+  "schema": "agent-stream/theme/1",
+  "name": "blueprint",
+  "description": "Miini: the plan as a technical drawing. White linework on blueprint blue, a measured grid, progress as a dimension line, failures as redlines.",
+  "colors": {
+    "accent": {
+      "hex": "#7FDBFF",
+      "ansi256": 117,
+      "ansi": 14
+    },
+    "dim": {
+      "faint": true
+    },
+    "ok": {
+      "hex": "#E6F3FF",
+      "ansi256": 195,
+      "ansi": 15
+    },
+    "warn": {
+      "hex": "#FFD166",
+      "ansi256": 221,
+      "ansi": 11
+    },
+    "err": {
+      "hex": "#FF5D5D",
+      "ansi256": 203,
+      "ansi": 9
+    },
+    "title": {
+      "hex": "#FFFFFF",
+      "ansi256": 231,
+      "ansi": 15,
+      "bold": true
+    },
+    "think": {
+      "hex": "#9AB8D8",
+      "ansi256": 110,
+      "ansi": 7
+    },
+    "sky": {
+      "hex": "#3E6B9A",
+      "ansi256": 67,
+      "ansi": 4
+    },
+    "egg": {
+      "hex": "#7FDBFF",
+      "ansi256": 117,
+      "ansi": 14
+    },
+    "ships": [
+      {
+        "hex": "#7FDBFF",
+        "ansi256": 117,
+        "ansi": 14
+      },
+      {
+        "hex": "#E6F3FF",
+        "ansi256": 195,
+        "ansi": 15
+      },
+      {
+        "hex": "#9AB8D8",
+        "ansi256": 110,
+        "ansi": 7
+      },
+      {
+        "hex": "#FFD166",
+        "ansi256": 221,
+        "ansi": 11
+      }
+    ]
+  },
+  "glyphs": {
+    "unicode": {
+      "active": "◆",
+      "lit": "■",
+      "pending": "□",
+      "dropped": "×",
+      "launch": "◇",
+      "trail": "─",
+      "ahead": "╌",
+      "card_open": "┏",
+      "card_close": "┗",
+      "sky": "·┼",
+      "field": "",
+      "orbit": "◐◓◑◒"
+    },
+    "ascii": {
+      "active": "*",
+      "lit": "#",
+      "pending": "o",
+      "dropped": "x",
+      "launch": "+",
+      "trail": "-",
+      "ahead": ".",
+      "card_open": "+",
+      "card_close": "+",
+      "sky": "",
+      "field": "",
+      "orbit": "-\\|/"
+    }
+  },
+  "words": {
+    "tool": "draft",
+    "done": "inked",
+    "error": "redline",
+    "warn": "note",
+    "note": "",
+    "think": "measuring",
+    "wait": "awaiting sign-off",
+    "step": "detail",
+    "plan": "drawing set",
+    "run": "drawing opened",
+    "result_ok": "approved",
+    "altitude": "sheets",
+    "quiet": "no revisions for",
+    "fleet_title": "DRAWING REGISTER",
+    "report_title": "TITLE BLOCK",
+    "header": {
+      "task": "brief",
+      "cwd": "site",
+      "agent": "drafter",
+      "output": "sheet file",
+      "liftoff": "pencils down"
+    },
+    "states": {
+      "no_signal": "off the grid",
+      "dialing": "tracing",
+      "running": "drafting",
+      "waiting": "for sign-off",
+      "starting": "unrolling",
+      "success": "approved",
+      "failed": "redlined",
+      "error": "redlined",
+      "cancelled": "shelved",
+      "exited": "filed",
+      "ended": "filed",
+      "unknown": "unlabelled"
+    },
+    "report": {
+      "success": "APPROVED FOR CONSTRUCTION",
+      "failed": "RETURNED WITH REDLINES",
+      "error": "RETURNED WITH REDLINES",
+      "cancelled": "SHELVED",
+      "exited": "FILED",
+      "ended": "FILED"
+    },
+    "columns": {
+      "machine": "OFFICE",
+      "ship": "DWG",
+      "state": "STAGE",
+      "project": "PROJECT",
+      "agent": "DRAFTER",
+      "plan": "PROGRESS",
+      "elapsed": "TIME",
+      "now": "LATEST NOTE"
+    },
+    "metric": "measure",
+    "stage": "phase",
+    "eta": "due in",
+    "heartbeat": "last revision"
+  },
+  "background": {
+    "kind": "grid",
+    "density": 10
+  },
+  "gauge": "dimension",
+  "features": {
+    "callsigns": true,
+    "launch_header": true,
+    "mission_report": true,
+    "twinkle": false,
+    "holding_spinner": true
+  },
+  "callsigns": {
+    "names": [
+      "DWG",
+      "SHEET",
+      "DETAIL",
+      "ELEV",
+      "SECT",
+      "SITE",
+      "GRID",
+      "PLAN"
+    ]
+  },
+  "eggs": {
+    "error_streak": "three redlines in a row: the enemy's gate is down, flip the drawing",
+    "answer_42": "42 drafts: the answer, apparently",
+    "seldon_crisis": "a Seldon crisis: the drawings foresaw this",
+    "seldon_approves": "psychohistory approves the schedule",
+    "amaze": "every dimension closes",
+    "bugs": "redlined everywhere, approved anyway",
+    "wallfacer": "Wallfacer: the lone architect",
+    "fist_my_bump": "two sheets signed off together",
+    "dead_channel": "the studio is quiet; pencils sharpened",
+    "dark_forest": "dark forest",
+    "litany": "plans within plans",
+    "midnight": "drafted past midnight",
+    "hyperspace": "FOLDSPACE · drawings return in a moment",
+    "sol": "day {sol} on the drawings",
+    "science_it": "had to re-measure everything",
+    "chaotic_era": "three revisions, three suns"
+  }
+}

@@ -117,6 +117,28 @@ grep -q "$(printf '\033')" "$TMP/textrec/display.txt" && fail "text display is p
 [[ "$(jq -r .outcome.kind "$TMP/textrec/state.json")" == "exited" ]] || fail "no harness result and exit 0 is exited"
 grep -q '· exited · exit 0' "$TMP/textpane" || fail "text pane ending says exited"
 
+# ---------------------------------------------------------------- nesting ---
+# A run exports AGENT_STREAM_PARENT to its worker; an agent-stream run the
+# worker starts records it as parent. --parent sets it explicitly, and a
+# relative path is dropped rather than recorded wrong.
+
+cat >"$TMP/outerworker" <<W
+#!/usr/bin/env bash
+printf 'outer sees %s\n' "\$AGENT_STREAM_PARENT"
+"$BIN" run --agent codex --task inner --dir "$TMP/inner" -- "$TMP/textworker" >/dev/null 2>&1
+W
+chmod +x "$TMP/outerworker"
+"$BIN" run --agent codex --task outer --dir "$TMP/outer" -- "$TMP/outerworker" >/dev/null 2>&1 || fail "outer run"
+outer="$(cd "$TMP/outer" && pwd)"
+grep -q "outer sees $outer" "$TMP/outer/display.txt" || fail "the worker sees its own record as AGENT_STREAM_PARENT"
+[[ "$(jq -r .parent "$TMP/inner/header.json")" == "$outer" ]] || fail "a nested run records its parent in header.json"
+[[ "$(jq -r .parent "$TMP/inner/state.json")" == "$outer" ]] || fail "a nested run records its parent in state.json"
+[[ "$(jq -r .parent "$TMP/outer/state.json")" == "null" ]] || fail "a top-level run has no parent"
+AGENT_STREAM_PARENT= "$BIN" run --agent codex --task x --parent "$TMP/elsewhere" --dir "$TMP/explicit" -- "$TMP/textworker" >/dev/null 2>&1
+[[ "$(jq -r .parent "$TMP/explicit/state.json")" == "$TMP/elsewhere" ]] || fail "--parent sets the parent"
+AGENT_STREAM_PARENT=relative/dir "$BIN" run --agent codex --task x --dir "$TMP/rel" -- "$TMP/textworker" >/dev/null 2>&1
+[[ "$(jq -r .parent "$TMP/rel/state.json")" == "null" ]] || fail "a relative parent is dropped"
+
 # ---------------------------------------------------------------- errors ---
 
 rc=0

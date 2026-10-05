@@ -182,13 +182,40 @@ run_capture_context() {
 
 # The seed for state.json, derived from the merged context.
 run_capture_state_seed() {
-  printf '%s' "$1" | jq -c --arg dir "$run" '
+  local theme loud
+  theme="$(run_capture_theme_choice "$1")"
+  loud="${theme#*$'\t'}"
+  theme="${theme%%$'\t'*}"
+  printf '%s' "$1" | jq -c --arg dir "$run" --arg theme "$theme" --arg loud "$loud" '
     {id: .id, agent: .agent, model_requested: (.model_requested // null),
      task: .task,
+     parent: (.parent // null | if type == "string" then . else null end),
      project: {name: .project, dir: .cwd, branch: .branch},
+     theme: {name: $theme, loudness: $loud},
      record: {dir: $dir, events: ($dir + "/events.jsonl"), display: ($dir + "/display.txt"),
               state: ($dir + "/state.json"), log: ($dir + "/log.txt")}}' 2>/dev/null \
     || printf '{}'
+}
+
+# run_capture_theme_choice CONTEXT: "THEME<TAB>LOUDNESS" the run asked for:
+# the environment, else the project's .agent-stream/config.json, else space
+# at loud. Recorded in state.json so a watcher or board on another machine
+# styles the run the way its own project chose; what this terminal can
+# show is decided later, by the presenter.
+run_capture_theme_choice() {
+  local cwd top cfg theme="${AGENT_STREAM_THEME:-}" loud="${AGENT_STREAM_LOUDNESS:-}"
+  cwd="$(printf '%s' "$1" | jq -r '.cwd // ""' 2>/dev/null)" || cwd=""
+  if [[ -n "$cwd" ]] && command -v git >/dev/null 2>&1; then
+    top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || top=""
+    if [[ -n "$top" && -f "$top/.agent-stream/config.json" ]]; then
+      cfg="$(jq -r '[(.theme // "" | tostring), (.loudness // "" | tostring)] | @tsv' \
+        "$top/.agent-stream/config.json" 2>/dev/null)" || cfg=""
+      [[ -n "$theme" ]] || theme="${cfg%%$'\t'*}"
+      [[ -n "$loud" ]] || loud="${cfg#*$'\t'}"
+    fi
+  fi
+  case "$theme" in ''|auto) theme=space ;; esac
+  printf '%s\t%s' "$theme" "${loud:-loud}"
 }
 
 # The header is printed only when the caller wrote one: a dispatcher that
@@ -328,6 +355,10 @@ run_capture_exec() {
   touch "$run/log.txt" "$run/display.txt"
   _RC_CONTEXT="$(run_capture_context "$format")"
   _RC_SEED="$(run_capture_state_seed "$_RC_CONTEXT")"
+  # The pane picks its theme from the run's project, not from wherever the
+  # dispatcher happens to be. Local, so the caller's environment is unchanged;
+  # the presenter's subshells see it through dynamic scope.
+  local AGENT_STREAM_PROJECT_DIR="${AGENT_STREAM_PROJECT_DIR:-$(printf '%s' "$_RC_CONTEXT" | jq -r '.cwd // ""' 2>/dev/null)}"
   _RC_STATE_PID=""
   task="$(printf '%s' "$_RC_CONTEXT" | jq -r '.task // ""' 2>/dev/null)"
   if [[ -n "$task" ]]; then
