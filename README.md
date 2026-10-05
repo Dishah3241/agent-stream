@@ -49,9 +49,9 @@ Shell redirection needs approval, so I'll use the Edit tool instead.
 ────────────────────────────────────────────────────────────────────────────────
 ```
 
-`docs/design.md` records the problem, the evidence, the options considered, and the decisions.
+`docs/design.md` records the problem, the evidence, the options considered, and the decisions. `docs/spec-themes.md` is the spec for project themes, Forge telemetry, and the board. `docs/handoff.md` says where things stand and what is not verified yet, and `AGENTS.md` ends with a quick map of the tree.
 
-ACP agents are driven over the Agent Client Protocol's protocol 2, and `agent-stream watch` opens a Bubble Tea app over every run record: a fleet of runs and a scrollable view of any one of them (see [The watcher](#the-watcher)).
+ACP agents are driven over the Agent Client Protocol's protocol 2, and `agent-stream watch` opens a Bubble Tea app over every run record: a fleet of runs and a scrollable view of any one of them (see [The watcher](#the-watcher)). `agent-stream board` does the same over several machines through SSH (see [The board](#the-board)). Each project can choose its own look (see [Themes](#themes)).
 
 ## How it works
 

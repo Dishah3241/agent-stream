@@ -546,6 +546,29 @@ on a pipe or under `NO_COLOR`, and only 16-color codes under
 
 ## 10. What was verified, and how
 
+Third round (themes, Forge telemetry, and the board; `docs/spec-themes.md`):
+
+- Eight Bash test files, `bash -n`, and `shellcheck -S error` pass in CI on
+  Ubuntu and on macOS with the system Bash 3.2. The watcher job runs
+  `gofmt`, `go vet`, `go test`, and the smoke test on Ubuntu and macOS,
+  which covers the Go 1.26 build on macOS.
+- The base look is byte-identical to the output before themes, and the
+  callsigns match between Bash and Go on a shared golden table.
+- A fake Forge job in a project configured for observatory showed the
+  themed pane and the watcher's telemetry panel: stage, forecast,
+  heartbeat, sparklines, and the stage timeline.
+- The board runs its real poll and tail scripts through a stand-in `ssh` in
+  the Go tests. Under `AGENT_STREAM_REAL_SSH=1`, it also runs through the
+  real ssh client against a private `sshd` on a loopback port, on Linux and
+  macOS. The shared connection outlives `sshd`, and a refused machine is
+  no signal. That test found that the ControlMaster socket path could pass
+  macOS's 104-byte limit; `ControlDir` in `board.go` now keeps it short.
+- A nested `agent-stream run` records its parent, and the board indents it.
+
+Not verified in the third round: the board across real separate machines,
+whether `herdr agent run` passes `AGENT_STREAM_PARENT` through, and the
+VHS-recorded theme gallery. `docs/handoff.md` keeps the full list.
+
 Second round (ACP protocol 2 and the watcher):
 
 - The v2 renderer was checked again against the SDK 1.7.0 schema, and three
@@ -566,7 +589,8 @@ Second round (ACP protocol 2 and the watcher):
 
 Not verified in the second round: a real ACP agent (none could be run
 here; the shapes are the schema's), the watcher in a real multiplexer with
-several live agents, and the Go build on macOS.
+several live agents, and the Go build on macOS (CI covers it since the
+third round).
 
 First round:
 
@@ -608,3 +632,6 @@ agent, and the pinned footer in a real multiplexer.
   `allow`?
 - Watcher: is ten the right number of ended runs to show by default, and is
   two minutes the right threshold for calling an open run quiet?
+- Board: does `herdr agent run` pass the environment through, so nested
+  runs find `AGENT_STREAM_PARENT`? Which machine runs the board, and what
+  are the machines' ssh host names?

@@ -1,9 +1,10 @@
 # Spec: project themes, Forge telemetry, and the combined board
 
-Status: agreed in an interview with the owner on 2026-10-04. This spec
-drives the next four milestones. Where it says "assumption", the owner has
-not confirmed the detail; build it as written and flag it in the pull
-request.
+Status: agreed in an interview with the owner on 2026-10-04. All five
+milestones are built and merged (pull request #2); section 8.1 says how
+each landed, and `docs/handoff.md` lists what still needs the owner's
+machines. Where this spec says "assumption", the owner has not confirmed
+the detail.
 
 ## 1. Context
 
@@ -306,7 +307,10 @@ Each milestone is a pull request that passes CI on Linux and macOS.
   `display.txt` in the background. Additions to the plan: `"local": true`
   reads a machine's root without ssh, `AGENT_STREAM_SSH` replaces the ssh
   command (the tests use a stand-in), and themes name the MACHINE column
-  and the `no_signal` and `dialing` states.
+  and the `no_signal` and `dialing` states. The board is also tested over
+  the real ssh client against a private `sshd`, on Linux and macOS. That
+  test led to `AGENT_STREAM_SSH_CONTROL` and a short socket directory,
+  because macOS caps a socket path at 104 bytes.
 
 Changes from the plan, as built: the record carries the requested theme in
 `state.json` (`theme.name`, `theme.loudness`) rather than in
